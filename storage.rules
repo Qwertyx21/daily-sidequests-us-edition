@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function authorized() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in [
+          'aaronmathewg21@gmail.com',
+          'viniputhran17@gmail.com'
+        ];
+    }
+
+    match /couples/{roomId}/{allPaths=**} {
+      allow read, write: if authorized()
+        && (request.resource == null
+          || request.resource.size < 10 * 1024 * 1024
+          && request.resource.contentType.matches('image/.*'));
+    }
+  }
+}

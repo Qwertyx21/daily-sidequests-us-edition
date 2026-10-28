@@ -1,18 +1,25 @@
-self.addEventListener('push', (event) => {
-  let payload = {};
-  try {
-    payload = event.data ? event.data.json() : {};
-  } catch (error) {
-    console.error('Could not parse push notification payload:', error);
-    payload = { title: 'Daily SideQuests', body: 'You have a new update.' };
-  }
+importScripts('https://www.gstatic.com/firebasejs/11.3.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/11.3.0/firebase-messaging-compat.js');
 
-  event.waitUntil(self.registration.showNotification(payload.title || 'Daily SideQuests', {
-    body: payload.body || 'You have a new update.',
+firebase.initializeApp({
+  apiKey: 'AIzaSyC1tR-idMqLiC8xxwCgnxF1YqWOn4H7C4A',
+  authDomain: 'couplequests-4faa5.firebaseapp.com',
+  projectId: 'couplequests-4faa5',
+  storageBucket: 'couplequests-4faa5.firebasestorage.app',
+  messagingSenderId: '633537838047',
+  appId: '1:633537838047:web:e3f6d7ab7183e84323c57c'
+});
+
+firebase.messaging().onBackgroundMessage((payload) => {
+  const notification = payload.notification || {};
+  const title = notification.title || payload.data?.title || 'Daily SideQuests';
+  const body = notification.body || payload.data?.body || 'You have a new update.';
+  return self.registration.showNotification(title, {
+    body,
     icon: '/icon-192.png',
     badge: '/icon-192.png',
-    data: { url: payload.url || '/' }
-  }));
+    data: { url: payload.fcmOptions?.link || '/' }
+  });
 });
 
 self.addEventListener('notificationclick', (event) => {

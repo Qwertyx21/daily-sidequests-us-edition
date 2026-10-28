@@ -1,6 +1,25 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth, googleProvider, signInWithPopup, signOut } from './firebase';
+import {
+  auth,
+  googleProvider,
+  signInWithPopup,
+  signInWithRedirect,
+  getRedirectResult,
+  signOut
+} from './firebase';
+import {
+  persistStateChanges,
+  publishPresence,
+  saveChatMessage,
+  saveMemory,
+  saveQuest,
+  saveSharedPromptAnswer,
+  seedRoomFromLocal,
+  subscribeToRoom,
+  type SyncState
+} from './firestoreSync';
+import { registerPushToken } from './pushNotifications';
 import {
   Heart,
   Flame,
@@ -40,7 +59,6 @@ import {
   Smile,
   Sliders,
   Smartphone,
-  Shield,
   Share2,
   Copy,
   Wifi,
@@ -59,6 +77,207 @@ type PartnerId = 'aaron' | 'vini';
 type TabId = 'quests' | 'vault' | 'chat';
 type QuestSlotType = 'morning' | 'afternoon' | 'golden' | 'nightcap';
 type WashiTheme = 'rose' | 'gold' | 'sage' | 'kraft';
+type SiteThemeId =
+  | 'rosewater'
+  | 'matcha'
+  | 'lavender'
+  | 'terracotta'
+  | 'coastal'
+  | 'midnight-velvet'
+  | 'espresso-noir'
+  | 'starlight';
+
+interface SiteThemeDefinition {
+  id: SiteThemeId;
+  name: string;
+  icon: string;
+  tagline: string;
+  isDark: boolean;
+  bgPrimary: string;
+  bgSurface: string;
+  bgSurfaceSoft: string;
+  bgHeader: string;
+  bgBannerGradient: string;
+  bgPageRadial: string;
+  textPrimary: string;
+  textSecondary: string;
+  textMuted: string;
+  borderPrimary: string;
+  accentPrimary: string;
+  accentGradient: string;
+  swatchColors: [string, string, string];
+}
+
+const SITE_THEMES: Record<SiteThemeId, SiteThemeDefinition> = {
+  rosewater: {
+    id: 'rosewater',
+    name: 'Rosewater Cream',
+    icon: '🌸',
+    tagline: 'Warm editorial ivory, blush rose & sunlit gold',
+    isDark: false,
+    bgPrimary: '#FAF7F2',
+    bgSurface: '#FFFFFF',
+    bgSurfaceSoft: '#F3EDE4',
+    bgHeader: 'rgba(250, 247, 242, 0.92)',
+    bgBannerGradient: 'linear-gradient(135deg, #FFF1F2 0%, #FFFFFF 50%, #FFFBEB 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(244, 63, 94, 0.08) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(217, 119, 6, 0.09) 0px, transparent 55%)',
+    textPrimary: '#1C1917',
+    textSecondary: '#44403C',
+    textMuted: '#78716C',
+    borderPrimary: '#E7E0D6',
+    accentPrimary: '#E11D48',
+    accentGradient: 'linear-gradient(135deg, #F43F5E 0%, #F59E0B 100%)',
+    swatchColors: ['#FAF7F2', '#F43F5E', '#F59E0B']
+  },
+  matcha: {
+    id: 'matcha',
+    name: 'Kyoto Matcha',
+    icon: '🍵',
+    tagline: 'Serene botanical sage, oat milk & warm bamboo',
+    isDark: false,
+    bgPrimary: '#F3F7F2',
+    bgSurface: '#FFFFFF',
+    bgSurfaceSoft: '#E6EFE4',
+    bgHeader: 'rgba(243, 247, 242, 0.92)',
+    bgBannerGradient: 'linear-gradient(135deg, #ECFDF5 0%, #FFFFFF 50%, #FEFCE8 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(16, 185, 129, 0.09) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(132, 204, 22, 0.09) 0px, transparent 55%)',
+    textPrimary: '#14261C',
+    textSecondary: '#2F483A',
+    textMuted: '#5C7667',
+    borderPrimary: '#D3E2D0',
+    accentPrimary: '#059669',
+    accentGradient: 'linear-gradient(135deg, #10B981 0%, #0D9488 100%)',
+    swatchColors: ['#F3F7F2', '#10B981', '#0D9488']
+  },
+  lavender: {
+    id: 'lavender',
+    name: 'Lavender Daydream',
+    icon: '💜',
+    tagline: 'Dreamy lilac mist, soft wisteria & berry',
+    isDark: false,
+    bgPrimary: '#F7F4FC',
+    bgSurface: '#FFFFFF',
+    bgSurfaceSoft: '#EDE7F6',
+    bgHeader: 'rgba(247, 244, 252, 0.92)',
+    bgBannerGradient: 'linear-gradient(135deg, #F3E8FF 0%, #FFFFFF 50%, #FCE7F3 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(168, 85, 247, 0.09) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(236, 72, 153, 0.08) 0px, transparent 55%)',
+    textPrimary: '#231834',
+    textSecondary: '#463561',
+    textMuted: '#736091',
+    borderPrimary: '#DFD5F0',
+    accentPrimary: '#9333EA',
+    accentGradient: 'linear-gradient(135deg, #9333EA 0%, #EC4899 100%)',
+    swatchColors: ['#F7F4FC', '#9333EA', '#EC4899']
+  },
+  terracotta: {
+    id: 'terracotta',
+    name: 'Terracotta Sunset',
+    icon: '🌅',
+    tagline: 'Golden hour desert peach, warm clay & honey',
+    isDark: false,
+    bgPrimary: '#FDF6F0',
+    bgSurface: '#FFFFFF',
+    bgSurfaceSoft: '#F7E9DC',
+    bgHeader: 'rgba(253, 246, 240, 0.92)',
+    bgBannerGradient: 'linear-gradient(135deg, #FFEDD5 0%, #FFFFFF 50%, #FFE4E6 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(234, 88, 12, 0.09) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(225, 29, 72, 0.08) 0px, transparent 55%)',
+    textPrimary: '#2B1810',
+    textSecondary: '#573628',
+    textMuted: '#8A6251',
+    borderPrimary: '#EED6C4',
+    accentPrimary: '#EA580C',
+    accentGradient: 'linear-gradient(135deg, #EA580C 0%, #E11D48 100%)',
+    swatchColors: ['#FDF6F0', '#EA580C', '#E11D48']
+  },
+  coastal: {
+    id: 'coastal',
+    name: 'Amalfi Coastal',
+    icon: '🌊',
+    tagline: 'Crisp Mediterranean linen, seafoam & azure',
+    isDark: false,
+    bgPrimary: '#F2F8FB',
+    bgSurface: '#FFFFFF',
+    bgSurfaceSoft: '#E3EFF6',
+    bgHeader: 'rgba(242, 248, 251, 0.92)',
+    bgBannerGradient: 'linear-gradient(135deg, #E0F2FE 0%, #FFFFFF 50%, #FEF9C3 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(2, 132, 199, 0.09) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(14, 165, 233, 0.08) 0px, transparent 55%)',
+    textPrimary: '#0F2537',
+    textSecondary: '#2C4C66',
+    textMuted: '#5D7D99',
+    borderPrimary: '#CFE2EE',
+    accentPrimary: '#0284C7',
+    accentGradient: 'linear-gradient(135deg, #0284C7 0%, #0D9488 100%)',
+    swatchColors: ['#F2F8FB', '#0284C7', '#0D9488']
+  },
+  'midnight-velvet': {
+    id: 'midnight-velvet',
+    name: 'Midnight Velvet (Dark)',
+    icon: '🌙',
+    tagline: 'Deep obsidian plum, luminous rose & warm gold',
+    isDark: true,
+    bgPrimary: '#110E16',
+    bgSurface: '#1C1724',
+    bgSurfaceSoft: '#272033',
+    bgHeader: 'rgba(17, 14, 22, 0.93)',
+    bgBannerGradient: 'linear-gradient(135deg, #2A1929 0%, #1C1724 55%, #291E19 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(244, 63, 94, 0.14) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(245, 158, 11, 0.1) 0px, transparent 55%)',
+    textPrimary: '#F8F5FA',
+    textSecondary: '#DDD6E5',
+    textMuted: '#A398B3',
+    borderPrimary: '#362D47',
+    accentPrimary: '#FB7185',
+    accentGradient: 'linear-gradient(135deg, #F43F5E 0%, #F59E0B 100%)',
+    swatchColors: ['#110E16', '#F43F5E', '#F59E0B']
+  },
+  'espresso-noir': {
+    id: 'espresso-noir',
+    name: 'Espresso Noir (Dark)',
+    icon: '☕',
+    tagline: 'Cozy late-night cafe roast, caramel & warm cream',
+    isDark: true,
+    bgPrimary: '#14110F',
+    bgSurface: '#211C18',
+    bgSurfaceSoft: '#2D2621',
+    bgHeader: 'rgba(20, 17, 15, 0.93)',
+    bgBannerGradient: 'linear-gradient(135deg, #2D1F1A 0%, #211C18 55%, #2B2318 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(217, 119, 6, 0.14) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(244, 63, 94, 0.1) 0px, transparent 55%)',
+    textPrimary: '#F7F3EF',
+    textSecondary: '#DFD7CF',
+    textMuted: '#A89D93',
+    borderPrimary: '#3D342D',
+    accentPrimary: '#F59E0B',
+    accentGradient: 'linear-gradient(135deg, #D97706 0%, #E11D48 100%)',
+    swatchColors: ['#14110F', '#D97706', '#E11D48']
+  },
+  starlight: {
+    id: 'starlight',
+    name: 'Starlight Aurora (Dark)',
+    icon: '🌌',
+    tagline: 'Deep midnight sky, bioluminescent cyan & violet',
+    isDark: true,
+    bgPrimary: '#0B111E',
+    bgSurface: '#151E31',
+    bgSurfaceSoft: '#1E2A44',
+    bgHeader: 'rgba(11, 17, 30, 0.93)',
+    bgBannerGradient: 'linear-gradient(135deg, #172542 0%, #151E31 55%, #241B3B 100%)',
+    bgPageRadial:
+      'radial-gradient(at 15% 10%, rgba(56, 189, 248, 0.14) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(168, 85, 247, 0.14) 0px, transparent 55%)',
+    textPrimary: '#F1F5F9',
+    textSecondary: '#CBD5E1',
+    textMuted: '#94A3B8',
+    borderPrimary: '#2B3B59',
+    accentPrimary: '#38BDF8',
+    accentGradient: 'linear-gradient(135deg, #0EA5E9 0%, #8B5CF6 100%)',
+    swatchColors: ['#0B111E', '#0EA5E9', '#8B5CF6']
+  }
+};
 
 interface PartnerProfile {
   id: PartnerId;
@@ -68,8 +287,8 @@ interface PartnerProfile {
   tagline: string;
   accentColor: string;
   backgroundColor: string;
+  themeId?: SiteThemeId;
 }
-
 interface SecretReward {
   photoUrl: string;
   caption: string;
@@ -91,6 +310,21 @@ interface PolaroidMemory {
   timestamp: string;
   questTitle: string;
   isSecretRewardUnlocked?: boolean;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+type SharedPromptCategory =
+  | 'deep-question'
+  | 'mini-challenge'
+  | 'spicy-sweet'
+  | 'future-us'
+  | 'playful-debate';
+
+interface SharedPromptAnswer {
+  text: string;
+  answeredAt: string;
+  timestamp: number;
 }
 
 interface QuestItem {
@@ -110,6 +344,13 @@ interface QuestItem {
   snoozeUntilTimestamp: number | null; // epoch ms when active snooze expires
   secretReward: SecretReward | null;
   completedMemoryId: string | null;
+  createdAt?: number;
+  updatedAt?: number;
+  dropType?: 'photo-drop' | 'sidequest';
+  senderPhotoUrl?: string;
+  isSharedPrompt?: boolean;
+  promptCategory?: SharedPromptCategory;
+  answers?: Partial<Record<PartnerId, SharedPromptAnswer>>;
 }
 
 interface GoldenVoucher {
@@ -129,11 +370,13 @@ interface ChatMessage {
   id: string;
   senderId: PartnerId;
   text: string;
+  photoUrl?: string;
   timestamp: string;
   reactions: Record<string, PartnerId[]>;
   isSystemSpark?: boolean;
   seenByPartner?: boolean;
   replyToText?: string;
+  createdAt?: number;
 }
 
 interface ToastNotification {
@@ -167,12 +410,216 @@ const STARTER_QUEST_IDS = new Set([
 ]);
 const STARTER_MEMORY_IDS = new Set(['mem-initial-1', 'mem-initial-2', 'mem-initial-3']);
 
+function extractItemTimestamp(id: string | undefined, explicitTime?: number): number {
+  if (typeof explicitTime === 'number' && Number.isFinite(explicitTime) && explicitTime > 0) {
+    return explicitTime;
+  }
+  if (typeof id === 'string') {
+    const match = /(\d{10,15})/.exec(id);
+    if (match) {
+      const parsed = Number(match[1]);
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return 0;
+}
+
+const SHARED_PROMPT_CATEGORY_META: Record<
+  SharedPromptCategory,
+  { label: string; icon: string; badgeClass: string }
+> = {
+  'deep-question': {
+    label: 'AI Deep Question',
+    icon: '💭',
+    badgeClass: 'bg-rose-100 text-rose-800 border-rose-200'
+  },
+  'mini-challenge': {
+    label: 'Couple Mini-Challenge',
+    icon: '⚡',
+    badgeClass: 'bg-amber-100 text-amber-900 border-amber-300'
+  },
+  'spicy-sweet': {
+    label: 'Sweet & Flirty Spark',
+    icon: '🔥',
+    badgeClass: 'bg-pink-100 text-pink-800 border-pink-200'
+  },
+  'future-us': {
+    label: 'Future Us Dream',
+    icon: '🌙',
+    badgeClass: 'bg-indigo-100 text-indigo-800 border-indigo-200'
+  },
+  'playful-debate': {
+    label: 'Playful Couple Debate',
+    icon: '🎲',
+    badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-200'
+  }
+};
+
+const AI_COUPLE_PROMPTS_POOL: Array<{
+  category: SharedPromptCategory;
+  title: string;
+  prompt: string;
+}> = [
+  {
+    category: 'deep-question',
+    title: 'Small Moment, Big Love',
+    prompt: 'What is one small, ordinary moment with your partner recently that secretly meant the world to you?'
+  },
+  {
+    category: 'mini-challenge',
+    title: '3-Emoji Vibe Check Challenge',
+    prompt: 'Pick 3 emojis that describe your partner’s energy right now and write one sentence explaining why!'
+  },
+  {
+    category: 'spicy-sweet',
+    title: 'First Crush Confession',
+    prompt: 'What was the very first thing you noticed or thought about your partner that made you fall for them?'
+  },
+  {
+    category: 'future-us',
+    title: 'Spontaneous 48-Hour Escape',
+    prompt: 'If we packed a bag tonight for a surprise 48-hour trip together, where are we going and what is the first thing we do?'
+  },
+  {
+    category: 'playful-debate',
+    title: 'Zombie Apocalypse Duo Roles',
+    prompt: 'If the two of us were in a movie survival adventure together, what role would each of us play and who gets us into trouble first?'
+  },
+  {
+    category: 'deep-question',
+    title: 'Time-Machine Replay',
+    prompt: 'If we could relive one single day or date from our relationship from start to finish, which memory would you choose?'
+  },
+  {
+    category: 'mini-challenge',
+    title: 'Right-In-Front-Of-Me Challenge',
+    prompt: 'Look around you right now: describe what you are doing in 10 words and name one thing that would be better if your partner were right next to you.'
+  },
+  {
+    category: 'spicy-sweet',
+    title: 'Favorite Little Habit',
+    prompt: 'What is a tiny habit, laugh, or expression your partner does without realizing how adorable it is?'
+  },
+  {
+    category: 'future-us',
+    title: 'Sunday Morning 5 Years From Now',
+    prompt: 'Paint a picture of our ideal cozy Sunday morning together five years in the future—what does it look, sound, and smell like?'
+  },
+  {
+    category: 'playful-debate',
+    title: 'Our Official Couple Soundtrack',
+    prompt: 'If a movie about Aaron & Vini came out today, what song plays during the opening credits and why?'
+  },
+  {
+    category: 'deep-question',
+    title: 'Unspoken Appreciation',
+    prompt: 'What is something your partner does for you or for "us" that you want to thank them for right now?'
+  },
+  {
+    category: 'mini-challenge',
+    title: 'Two Truths & A Wish (Us Edition)',
+    prompt: 'Write two favorite memories of us and one secret wish you want the two of us to do together next month!'
+  },
+  {
+    category: 'spicy-sweet',
+    title: 'Heart-Skip Compliment',
+    prompt: 'Give your partner the most specific, unfiltered compliment that you know will make them blush when they read it.'
+  },
+  {
+    category: 'future-us',
+    title: 'Bucket List SideQuest',
+    prompt: 'Name one wild or romantic bucket-list experience Neither of us has ever tried that we HAVE to conquer together.'
+  },
+  {
+    category: 'playful-debate',
+    title: 'Desert Island Luxury',
+    prompt: 'We are stranded on a cozy tropical island together for a month: besides food, what is the one ridiculous item your partner would insist on bringing?'
+  },
+  {
+    category: 'deep-question',
+    title: 'Safe Harbor Feeling',
+    prompt: 'When do you feel the most calm, understood, and at home with your partner?'
+  },
+  {
+    category: 'mini-challenge',
+    title: '6-Word Love Story Challenge',
+    prompt: 'Write the story of Aaron & Vini in exactly 6 words—make them count!'
+  },
+  {
+    category: 'spicy-sweet',
+    title: 'Next Hug Forecast',
+    prompt: 'Describe in vivid detail the exact hug or kiss waiting for your partner the next time you see each other.'
+  }
+];
+
 function withoutStarterQuests(quests: QuestItem[]): QuestItem[] {
-  return quests.filter((quest) => !STARTER_QUEST_IDS.has(quest.id));
+  return quests.filter((quest) => quest?.id && !STARTER_QUEST_IDS.has(quest.id));
+}
+
+function mergeQuests(current: QuestItem[], incoming: QuestItem[]): QuestItem[] {
+  const merged = new Map<string, QuestItem>();
+  for (const quest of [...withoutStarterQuests(current), ...withoutStarterQuests(incoming)]) {
+    if (!quest?.id) continue;
+    const previous = merged.get(quest.id);
+    if (!previous) {
+      const answers = quest.answers || {};
+      const isSharedDone = quest.isSharedPrompt
+        ? Boolean(answers.aaron?.text && answers.vini?.text)
+        : Boolean(quest.isCompleted);
+      merged.set(quest.id, {
+        ...quest,
+        isCompleted: isSharedDone,
+         ...(quest.isSharedPrompt ? { answers } : {}),
+        createdAt: extractItemTimestamp(quest.id, quest.createdAt) || Date.now()
+      });
+      continue;
+    }
+
+    const mergedAnswers: Partial<Record<PartnerId, SharedPromptAnswer>> = {
+      ...(previous.answers || {}),
+      ...(quest.answers || {})
+    };
+    const isSharedPrompt = Boolean(previous.isSharedPrompt || quest.isSharedPrompt);
+    const isCompleted = isSharedPrompt
+      ? Boolean(mergedAnswers.aaron?.text && mergedAnswers.vini?.text)
+      : Boolean(previous.isCompleted || quest.isCompleted);
+
+    merged.set(quest.id, {
+      ...previous,
+      ...quest,
+      isSharedPrompt,
+      isCompleted,
+      ...(isSharedPrompt ? { answers: mergedAnswers } : {}),
+      createdAt: extractItemTimestamp(quest.id, quest.createdAt ?? previous.createdAt) || Date.now()
+    });
+  }
+  return [...merged.values()].sort(
+    (a, b) => extractItemTimestamp(b.id, b.createdAt) - extractItemTimestamp(a.id, a.createdAt)
+  );
 }
 
 function withoutStarterMemories(memories: PolaroidMemory[]): PolaroidMemory[] {
-  return memories.filter((memory) => !STARTER_MEMORY_IDS.has(memory.id));
+  return memories.filter((memory) => memory?.id && !STARTER_MEMORY_IDS.has(memory.id));
+}
+
+function mergeMemories(current: PolaroidMemory[], incoming: PolaroidMemory[]): PolaroidMemory[] {
+  const merged = new Map<string, PolaroidMemory>();
+  for (const memory of [...withoutStarterMemories(current), ...withoutStarterMemories(incoming)]) {
+    if (!memory?.id) continue;
+    const previous = merged.get(memory.id);
+    if (!previous) {
+      merged.set(memory.id, memory);
+      continue;
+    }
+    const prevUpdated = extractItemTimestamp(previous.id, previous.updatedAt ?? previous.createdAt);
+    const nextUpdated = extractItemTimestamp(memory.id, memory.updatedAt ?? memory.createdAt);
+    if (nextUpdated >= prevUpdated) {
+      merged.set(memory.id, { ...previous, ...memory });
+    }
+  }
+  return [...merged.values()].sort(
+    (a, b) => extractItemTimestamp(b.id, b.createdAt) - extractItemTimestamp(a.id, a.createdAt)
+  );
 }
 
 function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]): ChatMessage[] {
@@ -181,39 +628,32 @@ function mergeChatMessages(current: ChatMessage[], incoming: ChatMessage[]): Cha
     if (!message?.id || SEEDED_MESSAGE_IDS.has(message.id) || message.id.startsWith('msg-reply-')) continue;
     const previous = merged.get(message.id);
     if (!previous) {
-      merged.set(message.id, message);
+      merged.set(message.id, {
+        ...message,
+        reactions: message.reactions || {},
+        createdAt: extractItemTimestamp(message.id, message.createdAt) || Date.now()
+      });
       continue;
     }
 
-    const reactions: Record<string, PartnerId[]> = { ...(previous.reactions || {}) };
-    for (const [emoji, partners] of Object.entries(message.reactions || {})) {
-      reactions[emoji] = [...new Set([...(reactions[emoji] || []), ...partners])];
+    const reactions: Record<string, PartnerId[]> = {};
+    const sourceReactions = message.reactions !== undefined ? message.reactions : previous.reactions || {};
+    for (const [emoji, partners] of Object.entries(sourceReactions || {})) {
+      if (Array.isArray(partners) && partners.length > 0) {
+        reactions[emoji] = [...new Set(partners)];
+      }
     }
     merged.set(message.id, {
       ...previous,
       ...message,
+      createdAt: extractItemTimestamp(message.id, message.createdAt ?? previous.createdAt) || Date.now(),
       seenByPartner: !!previous.seenByPartner || !!message.seenByPartner,
       reactions
     });
   }
-  return [...merged.values()];
-}
-
-function mergeIncomingState(current: AppSharedState, incoming: AppSharedState, partner: PartnerId): AppSharedState {
-  const sanitized = {
-    ...incoming,
-    quests: withoutStarterQuests(incoming.quests || []).filter((quest) => quest.forPartner === partner),
-    memories: withoutStarterMemories(incoming.memories || []),
-    privateWhispers: {
-      aaron: partner === 'aaron' ? incoming.privateWhispers?.aaron || '' : '',
-      vini: partner === 'vini' ? incoming.privateWhispers?.vini || '' : ''
-    },
-    vouchers: []
-  };
-  const messages = mergeChatMessages(current.messages || [], sanitized.messages || []);
-  const messagesChanged = JSON.stringify(messages) !== JSON.stringify(current.messages || []);
-  if (sanitized.lastUpdated > current.lastUpdated) return { ...sanitized, messages };
-  return messagesChanged ? { ...current, messages } : current;
+  return [...merged.values()].sort(
+    (a, b) => extractItemTimestamp(a.id, a.createdAt) - extractItemTimestamp(b.id, b.createdAt)
+  );
 }
 
 function getLocalDateKey(date = new Date()): string {
@@ -510,14 +950,14 @@ function triggerCelebrationConfetti() {
 // Client-Side Image Compression Helper
 // ---------------------------------------------------------------------------
 
-function compressImageFile(file: File, maxDim = 560, quality = 0.8): Promise<string> {
+function compressImageFile(file: File, maxDim = 640, quality = 0.78): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        let { width, height } = img;
+        const { width, height } = img;
         const size = Math.min(width, height);
         const sx = (width - size) / 2;
         const sy = (height - size) / 2;
@@ -529,7 +969,11 @@ function compressImageFile(file: File, maxDim = 560, quality = 0.8): Promise<str
           return;
         }
         ctx.drawImage(img, sx, sy, size, size, 0, 0, maxDim, maxDim);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        let dataUrl = canvas.toDataURL('image/jpeg', quality);
+        if (dataUrl.length > 480_000) {
+          dataUrl = canvas.toDataURL('image/jpeg', 0.62);
+        }
+        resolve(dataUrl);
       };
       img.onerror = reject;
       img.src = e.target?.result as string;
@@ -537,6 +981,24 @@ function compressImageFile(file: File, maxDim = 560, quality = 0.8): Promise<str
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+function saveStateToLocalStorage(state: AppSharedState): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {
+    try {
+      // If localStorage is near the 5MB limit due to many photos, keep all chats & quests and the 8 most recent photos in localStorage
+      // (Firestore cloud + IndexedDB persistentLocalCache retain 100% of photos permanently).
+      const compactState: AppSharedState = {
+        ...state,
+        memories: state.memories.slice(0, 8)
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(compactState));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -613,8 +1075,8 @@ function createInitialState(): AppSharedState {
 
 const STORAGE_KEY = 'daily_sidequests_us_edition_v2';
 const DEVICE_LOCK_KEY = 'daily_sidequests_device_owner_v2';
-const SERVER_URL_KEY = 'daily_sidequests_ws_server_v2';
 const DARK_MODE_KEY = 'daily_sidequests_dark_mode_v1';
+const THEME_STORAGE_KEY = 'daily_sidequests_theme_id_v1';
 const AUTHORIZED_EMAILS: Record<PartnerId, string> = {
   aaron: 'aaronmathewg21@gmail.com',
   vini: 'viniputhran17@gmail.com'
@@ -644,22 +1106,6 @@ function triggerLockScreenNotification(title: string, body: string, tag = 'sideq
   }
 }
 
-function decodeVapidPublicKey(value: string): Uint8Array<ArrayBuffer> {
-  const padded = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
-  const decoded = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
-  const key = new Uint8Array(decoded.length);
-  key.set(decoded);
-  return key;
-}
-
-function getApiBaseUrl(customServerUrl: string): string {
-  const cleaned = customServerUrl.trim().replace(/\/+$/, '');
-  if (!cleaned) return '';
-  if (cleaned.startsWith('wss://')) return cleaned.replace(/^wss:\/\//, 'https://').replace(/\/ws$/, '');
-  if (cleaned.startsWith('ws://')) return cleaned.replace(/^ws:\/\//, 'http://').replace(/\/ws$/, '');
-  return cleaned.replace(/\/ws$/, '');
-}
-
 // ---------------------------------------------------------------------------
 // Main Application Component
 // ---------------------------------------------------------------------------
@@ -686,33 +1132,58 @@ export default function App() {
   // and Vini's phone is locked to Vini's perspective so Aaron's side chat/private notes are never shown on Vini's app!
   const [activePartner, setActivePartner] = useState<PartnerId>(initialDeviceState.partner);
   const [isDeviceLocked, setIsDeviceLocked] = useState<boolean>(initialDeviceState.locked);
-  const [questViewSubMode, setQuestViewSubMode] = useState<'my-quests' | 'assign-partner'>('my-quests');
+  const [questViewSubMode, setQuestViewSubMode] = useState<'my-quests' | 'assign-partner' | 'shared-prompts'>('my-quests');
 
   const [activeTab, setActiveTab] = useState<TabId>('quests');
   const [isMuted, setIsMuted] = useState<boolean>(false);
-  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+  const [siteThemeId, setSiteThemeId] = useState<SiteThemeId>(() => {
     try {
-      return localStorage.getItem(DARK_MODE_KEY) === 'true';
+      const savedTheme = localStorage.getItem(THEME_STORAGE_KEY) as SiteThemeId | null;
+      if (savedTheme && SITE_THEMES[savedTheme]) {
+        return savedTheme;
+      }
+      if (localStorage.getItem(DARK_MODE_KEY) === 'true') {
+        return 'midnight-velvet';
+      }
     } catch {
-      return false;
+      // ignore storage errors
     }
+    return 'rosewater';
   });
+  const activeSiteTheme = SITE_THEMES[siteThemeId] || SITE_THEMES.rosewater;
+  const isDarkMode = activeSiteTheme.isDark;
+  const lastLightThemeRef = useRef<SiteThemeId>(activeSiteTheme.isDark ? 'rosewater' : activeSiteTheme.id);
+  const lastDarkThemeRef = useRef<SiteThemeId>(activeSiteTheme.isDark ? activeSiteTheme.id : 'midnight-velvet');
+
   useEffect(() => {
+    if (activeSiteTheme.isDark) {
+      lastDarkThemeRef.current = activeSiteTheme.id;
+    } else {
+      lastLightThemeRef.current = activeSiteTheme.id;
+    }
     try {
-      localStorage.setItem(DARK_MODE_KEY, String(isDarkMode));
+      localStorage.setItem(THEME_STORAGE_KEY, activeSiteTheme.id);
+      localStorage.setItem(DARK_MODE_KEY, String(activeSiteTheme.isDark));
     } catch {
       // Theme still works for this session if storage is unavailable.
     }
-  }, [isDarkMode]);
+  }, [activeSiteTheme]);
+
+  const handleSelectSiteTheme = (nextThemeId: SiteThemeId) => {
+    if (!SITE_THEMES[nextThemeId]) return;
+    soundEngine.playCardFlip();
+    setSiteThemeId(nextThemeId);
+  };
+
+  const handleToggleDarkMode = () => {
+    soundEngine.playCardFlip();
+    setSiteThemeId((currentId) => {
+      const cur = SITE_THEMES[currentId] || SITE_THEMES.rosewater;
+      return cur.isDark ? lastLightThemeRef.current : lastDarkThemeRef.current;
+    });
+  };
   const [partnerTyping, setPartnerTyping] = useState<boolean>(false);
   const [syncChannelStatus, setSyncChannelStatus] = useState<'live' | 'local'>('live');
-  const [customServerUrl, setCustomServerUrl] = useState<string>(() => {
-    try {
-      return localStorage.getItem(SERVER_URL_KEY) || '';
-    } catch {
-      return '';
-    }
-  });
   const [notifPermission, setNotifPermission] = useState<string>(() => {
     try {
       return typeof Notification !== 'undefined' ? Notification.permission : 'default';
@@ -760,6 +1231,12 @@ export default function App() {
     return createInitialState();
   });
   const knownQuestIdsRef = useRef(new Set(appState.quests.map((quest) => quest.id)));
+  const knownMessageIdsRef = useRef(new Set(appState.messages.map((message) => message.id)));
+  const hasChatSnapshotRef = useRef(false);
+  const hasQuestSnapshotRef = useRef(false);
+  const poppedPromptIdsRef = useRef(new Set<string>());
+  const autoPromptGeneratedRef = useRef(false);
+  const lastPingAtRef = useRef(0);
 
   // Per-Device Private Drafts (Never synced or exposed to the other partner's chat UI!)
   const [chatDraftsByPartner, setChatDraftsByPartner] = useState<Record<PartnerId, string>>({
@@ -773,6 +1250,7 @@ export default function App() {
 
   // Modals State
   const [isProfileModalOpen, setIsProfileModalOpen] = useState<boolean>(false);
+  const [isThemeModalOpen, setIsThemeModalOpen] = useState<boolean>(false);
   const [isLiveSyncModalOpen, setIsLiveSyncModalOpen] = useState<boolean>(false);
   const [editingQuest, setEditingQuest] = useState<QuestItem | null>(null);
   const [completingQuest, setCompletingQuest] = useState<QuestItem | null>(null);
@@ -782,10 +1260,18 @@ export default function App() {
   const [lightboxMemory, setLightboxMemory] = useState<PolaroidMemory | null>(null);
   const [isCreateChallengeOpen, setIsCreateChallengeOpen] = useState<boolean>(false);
   const [isCustomVoucherModalOpen, setIsCustomVoucherModalOpen] = useState<boolean>(false);
+  const [challengeDropType, setChallengeDropType] = useState<'photo-drop' | 'sidequest'>('photo-drop');
   const [challengeTitle, setChallengeTitle] = useState('');
   const [challengePrompt, setChallengePrompt] = useState('');
   const [challengeDateTime, setChallengeDateTime] = useState('');
+  const [challengePhotoUrl, setChallengePhotoUrl] = useState('');
+  const [challengePhotoBusy, setChallengePhotoBusy] = useState(false);
+  const [activeSharedPromptModalId, setActiveSharedPromptModalId] = useState<string | null>(null);
+  const [sharedPromptDrafts, setSharedPromptDrafts] = useState<Record<string, string>>({});
   const photoUploadRef = useRef<HTMLInputElement | null>(null);
+  const chatPhotoUploadRef = useRef<HTMLInputElement | null>(null);
+  const challengeCameraInputRef = useRef<HTMLInputElement | null>(null);
+  const challengeGalleryInputRef = useRef<HTMLInputElement | null>(null);
 
   // Photo Vault filter
   const [vaultFilter, setVaultFilter] = useState<'all' | PartnerId>('all');
@@ -796,10 +1282,11 @@ export default function App() {
   const [activeReactionMessageId, setActiveReactionMessageId] = useState<string | null>(null);
 
   // Refs for real-time sync
-  const wsRef = useRef<WebSocket | null>(null);
-  const wsAuthenticatedRef = useRef(false);
-  const pendingStateRef = useRef<AppSharedState | null>(null);
+  const appStateRef = useRef(appState);
+  const syncBaselineRef = useRef<SyncState>(appState);
+  const persistenceQueueRef = useRef(Promise.resolve());
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const typingStateRef = useRef(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   const otherPartner: PartnerId = activePartner === 'aaron' ? 'vini' : 'aaron';
@@ -828,6 +1315,11 @@ export default function App() {
   };
 
   useEffect(() => {
+    void getRedirectResult(auth).catch((error: unknown) => {
+      if (error instanceof Error && error.message) {
+        setAuthError(error.message);
+      }
+    });
     const unsubscribe = onAuthStateChanged(
       auth,
       (user) => {
@@ -855,17 +1347,13 @@ export default function App() {
         setAppState((current) => {
           const scoped = {
             ...current,
-            quests: current.quests.filter((quest) => quest.forPartner === partner),
+            quests: mergeQuests([], current.quests || []),
             privateWhispers: {
               aaron: partner === 'aaron' ? current.privateWhispers?.aaron || '' : '',
               vini: partner === 'vini' ? current.privateWhispers?.vini || '' : ''
             }
           };
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(scoped));
-          } catch {
-            // Keep the account-scoped state for this session if storage is unavailable.
-          }
+          saveStateToLocalStorage(scoped);
           return scoped;
         });
       },
@@ -882,39 +1370,14 @@ export default function App() {
     try {
       await signInWithPopup(auth, googleProvider);
     } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === 'auth/popup-blocked') {
+        await signInWithRedirect(auth, googleProvider);
+        return;
+      }
       setAuthError(error instanceof Error ? error.message : 'Google sign-in failed.');
     }
   };
-
-  const registerPushSubscription = useCallback(async () => {
-    const user = auth.currentUser;
-    if (!user || !('serviceWorker' in navigator) || !('PushManager' in window)) {
-      throw new Error('This browser does not support background push notifications.');
-    }
-    const apiBase = getApiBaseUrl(customServerUrl);
-    const keyResponse = await fetch(`${apiBase}/api/push/public-key`);
-    const keyData = await keyResponse.json().catch(() => ({}));
-    if (!keyResponse.ok || typeof keyData.publicKey !== 'string') {
-      throw new Error(keyData.error || 'Background push is not configured on the app server.');
-    }
-    const registration = await navigator.serviceWorker.ready;
-    let subscription = await registration.pushManager.getSubscription();
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: decodeVapidPublicKey(keyData.publicKey)
-      });
-    }
-    const token = await user.getIdToken();
-    const response = await fetch(`${apiBase}/api/push/subscribe`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(subscription)
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || `Could not save push subscription (${response.status}).`);
-    setPushSetupStatus('Background challenge notifications are enabled on this device.');
-  }, [customServerUrl]);
 
   const requestPushNotifications = async () => {
     if (typeof Notification === 'undefined') {
@@ -928,7 +1391,8 @@ export default function App() {
         setPushSetupStatus('Notification access was not granted; background alerts are off.');
         return;
       }
-      await registerPushSubscription();
+      await registerPushToken(activePartner, appState.roomCode);
+      setPushSetupStatus('Background challenge notifications are enabled on this device.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Could not enable background notifications.';
       setPushSetupStatus(message);
@@ -938,197 +1402,199 @@ export default function App() {
 
   useEffect(() => {
     if (authEmail && notifPermission === 'granted') {
-      void registerPushSubscription().catch((error: unknown) => {
+      void registerPushToken(activePartner, appState.roomCode).catch((error: unknown) => {
         const message = error instanceof Error ? error.message : 'Could not restore the push subscription.';
         setPushSetupStatus(message);
         console.error('Background push subscription restore failed:', error);
       });
     }
-  }, [authEmail, notifPermission, registerPushSubscription]);
+  }, [activePartner, appState.roomCode, authEmail, notifPermission]);
 
-  // Persist local changes and send them through the authenticated room connection.
+  // Keep the latest state available to realtime listeners and persistence callbacks.
+  appStateRef.current = appState;
+
+  // Persist local changes; Firestore snapshots deliver updates to the other device.
   const updateSharedState = useCallback((updater: (prev: AppSharedState) => AppSharedState) => {
     setAppState((prev) => {
       const updated = updater(prev);
       const next = {
         ...updated,
-        quests: withoutStarterQuests(updated.quests),
+        quests: mergeQuests(prev.quests || [], updated.quests || []),
+        memories: mergeMemories([], updated.memories || []),
         messages: mergeChatMessages(prev.messages || [], updated.messages || []),
         lastUpdated: Date.now()
       };
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-      } catch {
-        // ignore
-      }
-      try {
-        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          if (wsAuthenticatedRef.current) {
-            wsRef.current.send(JSON.stringify({ type: 'STATE_UPDATE', roomCode: next.roomCode, payload: next }));
-          } else {
-            pendingStateRef.current = next;
-          }
-        }
-      } catch {
-        pendingStateRef.current = next;
-      }
+      appStateRef.current = next;
+      saveStateToLocalStorage(next);
       return next;
     });
   }, []);
 
-  // Broadcast live typing event to partner's device
-  const emitTypingSignal = useCallback(
-    (isTypingNow: boolean) => {
-      const packet = {
-        type: 'PARTNER_TYPING',
-        roomCode: appState.roomCode,
-        fromPartner: activePartner,
-        isTyping: isTypingNow
-      };
-      try {
-        if (wsAuthenticatedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify(packet));
-        }
-      } catch {
-        // ignore
-      }
-    },
-    [activePartner, appState.roomCode]
-  );
-
-  // Connect only through the server after authenticating the Firebase account.
   useEffect(() => {
-    const handleIncomingSyncPacket = (data: Record<string, unknown>) => {
-      if (!data || typeof data !== 'object') return;
-      if (data.type === 'AUTH_OK') {
-        wsAuthenticatedRef.current = true;
+    if (!authEmail) return;
+    const targetState = appState;
+    persistenceQueueRef.current = persistenceQueueRef.current
+      .then(async () => {
+        const previous = syncBaselineRef.current;
+        await persistStateChanges(previous, targetState, activePartner);
+        syncBaselineRef.current = targetState;
         setSyncChannelStatus('live');
-        const pending = pendingStateRef.current;
-        if (pending && wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({ type: 'STATE_UPDATE', roomCode: appState.roomCode, payload: pending }));
-          pendingStateRef.current = null;
-        }
-        return;
-      }
-      if (data.type === 'AUTH_ERROR') {
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : 'Could not save your changes to Firestore.';
         setSyncChannelStatus('local');
-        setAuthError(typeof data.message === 'string' ? data.message : 'The sync server rejected this account.');
-        return;
-      }
-      if (data.type === 'SYNC_ERROR') {
-        setSyncChannelStatus('local');
-        setAuthError(typeof data.message === 'string' ? data.message : 'The sync server could not save the latest changes.');
-        return;
-      }
-      if ((data.type === 'STATE_SYNC' || data.type === 'STATE_UPDATE') && data.payload) {
-        const incoming = data.payload as AppSharedState;
-        const newAssignments = withoutStarterQuests(incoming.quests || []).filter(
+        setAuthError(message);
+        console.error('Firestore update failed:', error);
+      });
+  }, [activePartner, appState, authEmail]);
+
+  useEffect(() => {
+    if (!authEmail) return;
+    let active = true;
+    const unsubscribe = subscribeToRoom(
+      appState.roomCode,
+      activePartner,
+      (update) => {
+        if (!active) return;
+        const current = appStateRef.current;
+        const merged: AppSharedState = {
+          ...current,
+          ...update,
+          profiles: {
+            ...current.profiles,
+            ...(update.profiles as Partial<Record<PartnerId, PartnerProfile>> || {})
+          },
+          completedCountsByPartner: {
+            ...current.completedCountsByPartner,
+            ...(update.completedCountsByPartner || {})
+          },
+          quests: update.quests
+            ? mergeQuests(current.quests || [], update.quests as QuestItem[])
+            : current.quests,
+          memories: update.memories
+            ? mergeMemories(current.memories || [], update.memories as PolaroidMemory[])
+            : current.memories,
+          messages: update.messages
+            ? mergeChatMessages(current.messages || [], update.messages as ChatMessage[])
+            : current.messages,
+          privateWhispers: {
+            ...current.privateWhispers,
+            ...(update.privateWhispers
+              ? {
+                  [activePartner]:
+                    update.privateWhispers[activePartner] ?? current.privateWhispers[activePartner]
+                }
+              : {})
+          },
+          lastUpdated: Date.now()
+        };
+        const newAssignments = merged.quests.filter(
           (quest) =>
+            !quest.isSharedPrompt &&
+            quest.forPartner === activePartner &&
             quest.assignedBy !== activePartner &&
             wasRecentlyAssigned(quest) &&
             !knownQuestIdsRef.current.has(quest.id)
         );
-        for (const quest of incoming.quests || []) knownQuestIdsRef.current.add(quest.id);
+        const newSharedPrompts = merged.quests.filter(
+          (quest) =>
+            quest.isSharedPrompt &&
+            !quest.answers?.[activePartner]?.text &&
+            !poppedPromptIdsRef.current.has(quest.id)
+        );
+        for (const quest of merged.quests) knownQuestIdsRef.current.add(quest.id);
+        if (update.quests) hasQuestSnapshotRef.current = true;
         if (newAssignments.length) {
-          const newest = newAssignments[newAssignments.length - 1];
+          const newest = newAssignments[0];
+          const assignedByName = merged.profiles[newest.assignedBy]?.name || 'Your partner';
+          const body = `${assignedByName} set a challenge for you: ${newest.title}`;
+          pushToast('New challenge received', body, '🔔', 'amber');
+          soundEngine.playChime();
+          triggerLockScreenNotification('New challenge received', body, `challenge-${newest.id}`);
+        }
+        if (newSharedPrompts.length) {
+          const newestPrompt = newSharedPrompts[0];
+          for (const p of newSharedPrompts) poppedPromptIdsRef.current.add(p.id);
+          setActiveSharedPromptModalId(newestPrompt.id);
+          soundEngine.playChime();
           pushToast(
-            'New challenge received',
-            `${incoming.profiles?.[newest.assignedBy]?.name || 'Your partner'} assigned: ${newest.title}`,
-            '🔔',
-            'amber'
+            '✨ Couple Prompt for Both of You!',
+            `"${newestPrompt.title}" — Both ${merged.profiles.aaron.name} & ${merged.profiles.vini.name} must answer!`,
+            '🤖',
+            'rose'
           );
         }
-        setAppState((curr) => {
-        const merged = mergeIncomingState(curr, incoming, activePartner);
-          if (merged !== curr) {
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-            } catch {
-              // Keep the received state available for this session if storage is unavailable.
-            }
-          }
-          return merged;
-        });
-      } else if (data.type === 'PARTNER_PING') {
-        soundEngine.playChime();
-        const pingText = (data.message as string) || 'Thinking of you right now 💓';
-        pushToast(
-          `${appState.profiles[otherPartner].name} sent a Heart Ping!`,
-          pingText,
-          '💓',
-          'rose'
-        );
-        triggerLockScreenNotification(`💓 ${appState.profiles[otherPartner].name} sent a Heart Ping!`, pingText, 'heart-ping');
-      } else if (data.type === 'PARTNER_TYPING') {
-        setPartnerTyping(!!data.isTyping);
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-        if (data.isTyping) {
+        const newMessages = hasChatSnapshotRef.current
+          ? merged.messages.filter(
+              (message) => message.senderId !== activePartner && !knownMessageIdsRef.current.has(message.id)
+            )
+          : [];
+        for (const message of merged.messages) knownMessageIdsRef.current.add(message.id);
+        if (update.messages) hasChatSnapshotRef.current = true;
+        if (newMessages.length) {
+          soundEngine.playChime();
+          const newestMessage = newMessages[newMessages.length - 1];
+          pushToast('New chat message', newestMessage.text, '💬', 'rose');
+        }
+        syncBaselineRef.current = merged;
+        appStateRef.current = merged;
+        setAppState(merged);
+        saveStateToLocalStorage(merged);
+        setSyncChannelStatus('live');
+      },
+      (sender, data) => {
+        if (sender === activePartner) return;
+        if (data.isTyping === true) {
+          setPartnerTyping(true);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
           typingTimeoutRef.current = setTimeout(() => setPartnerTyping(false), 3000);
+        } else if (data.isTyping === false) {
+          setPartnerTyping(false);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         }
-      }
-    };
-
-    // Connect to the authenticated Express WebSocket server.
-    try {
-      let wsEndpoint = '';
-      if (customServerUrl.trim()) {
-        const cleaned = customServerUrl.trim().replace(/\/+$/, '');
-        if (cleaned.startsWith('ws://') || cleaned.startsWith('wss://')) {
-          wsEndpoint = cleaned.endsWith('/ws') ? cleaned : `${cleaned}/ws`;
-        } else if (cleaned.startsWith('https://')) {
-          wsEndpoint = `${cleaned.replace(/^https:\/\//, 'wss://')}/ws`;
-        } else if (cleaned.startsWith('http://')) {
-          wsEndpoint = `${cleaned.replace(/^http:\/\//, 'ws://')}/ws`;
+        const pingAt = Number(data.pingAt) || 0;
+        if (pingAt && pingAt > lastPingAtRef.current && pingAt > Date.now() - 15000) {
+          lastPingAtRef.current = pingAt;
+          soundEngine.playChime();
+          const senderName = appStateRef.current.profiles[sender]?.name || 'Your partner';
+          const text = `${senderName} sent a Heart Ping! 💓`;
+          pushToast(text, 'Thinking of you right now 💓', '💓', 'rose');
+          triggerLockScreenNotification(text, 'Thinking of you right now 💓', `heart-ping-${pingAt}`);
         }
-      } else {
-        const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = window.location.host;
-        if (host && !host.includes('usercontent.goog') && !host.includes('null')) {
-          wsEndpoint = `${proto}//${host}/ws`;
-        }
+      },
+      (error) => {
+        setSyncChannelStatus('local');
+        setAuthError(`Firestore sync failed: ${error.message}`);
+        console.error('Firestore listener failed:', error);
       }
-
-      if (wsEndpoint) {
-        const ws = new WebSocket(wsEndpoint);
-        ws.onopen = async () => {
-          try {
-            const user = auth.currentUser;
-            if (!user) throw new Error('Sign in before connecting to live sync.');
-            const token = await user.getIdToken();
-            ws.send(JSON.stringify({ type: 'JOIN_ROOM', roomCode: appState.roomCode, token }));
-          } catch (error) {
-            setAuthError(error instanceof Error ? error.message : 'Unable to authenticate live sync.');
-            ws.close();
-          }
-        };
-        ws.onmessage = (evt) => {
-          try {
-            const msg = JSON.parse(evt.data);
-            handleIncomingSyncPacket(msg);
-          } catch {
-            // ignore
-          }
-        };
-        ws.onerror = () => setSyncChannelStatus('local');
-        ws.onclose = () => {
-          wsAuthenticatedRef.current = false;
-          setSyncChannelStatus('local');
-        };
-        wsRef.current = ws;
-      }
-    } catch {
-      setSyncChannelStatus('local');
-    }
+    );
 
     return () => {
-      try {
-        wsAuthenticatedRef.current = false;
-        wsRef.current?.close();
-      } catch {
-        // ignore
-      }
+      active = false;
+      unsubscribe();
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     };
-  }, [activePartner, appState.profiles, appState.roomCode, customServerUrl, otherPartner, pushToast]);
+  }, [activePartner, appState.roomCode, authEmail, pushToast]);
+
+  useEffect(() => {
+    if (!authEmail) return;
+    const initialData = appStateRef.current;
+    void seedRoomFromLocal(initialData, activePartner).catch((error: unknown) => {
+      console.error('Firestore migration failed:', error);
+    });
+  }, [activePartner, authEmail]);
+
+  // Broadcast live typing state through a small Firestore presence document.
+  const emitTypingSignal = useCallback(
+    (isTypingNow: boolean) => {
+      if (typingStateRef.current === isTypingNow) return;
+      typingStateRef.current = isTypingNow;
+      void publishPresence(appState.roomCode, activePartner, { isTyping: isTypingNow }).catch((error: unknown) => {
+        console.error('Could not publish typing state:', error);
+      });
+    },
+    [activePartner, appState.roomCode]
+  );
 
   // Mark incoming partner messages as "Seen ✓✓" when viewing Chat Tab on this partner's device
   useEffect(() => {
@@ -1332,6 +1798,53 @@ export default function App() {
     );
   };
 
+  // Handle camera snap or photo upload inside the "Send a Love Drop / SideQuest" modal
+  const handleChallengePhotoSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setChallengePhotoBusy(true);
+    try {
+      const compressed = await compressImageFile(file, 640, 0.78);
+      setChallengePhotoUrl(compressed);
+      soundEngine.playPolaroidShutter();
+      if (!challengeTitle.trim()) {
+        setChallengeTitle(`📸 Photo Drop from ${currentProfile.name}`);
+      }
+    } catch {
+      pushToast('Photo Error', 'Could not read that image. Try another photo.', '⚠️', 'amber');
+    } finally {
+      setChallengePhotoBusy(false);
+    }
+  };
+
+  // Acknowledge / Love a Photo Drop sent by partner (1-tap completion without forcing recipient to snap a new photo unless they want to)
+  const handleAcknowledgePhotoDrop = (quest: QuestItem) => {
+    if (quest.forPartner !== activePartner || quest.isCompleted) return;
+    const now = Date.now();
+    const formattedTime = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (quest.senderPhotoUrl) {
+      const newMemory: PolaroidMemory = {
+        id: 'mem-' + now,
+        questId: quest.id,
+        slotType: quest.slot,
+        ownerId: quest.forPartner,
+        createdBy: quest.assignedBy,
+        photoUrl: quest.senderPhotoUrl,
+        caption: quest.title || `Photo Drop from ${appState.profiles[quest.assignedBy]?.name || partnerProfile.name}`,
+        sticker: '💖',
+        washi: 'rose',
+        timestamp: `OCT 28 '26 • ${formattedTime}`,
+        questTitle: 'Photo Drop 📸',
+        createdAt: now,
+        updatedAt: now
+      };
+      finalizeQuestAndReward(quest, newMemory);
+      return;
+    }
+    handleInitiateQuestCompletion(quest);
+  };
+
   // Complete a Quest -> Auto-unlock Preloaded Secret Reward OR open Blank Polaroid Studio
   const handleInitiateQuestCompletion = (quest: QuestItem) => {
     if (quest.forPartner !== activePartner || quest.isCompleted) return;
@@ -1364,47 +1877,69 @@ export default function App() {
     soundEngine.playFanfare();
     triggerCelebrationConfetti();
 
+    const now = Date.now();
+    const enrichedMemory: PolaroidMemory = {
+      ...memory,
+      createdAt: memory.createdAt || now,
+      updatedAt: now
+    };
+    const completedQuest: QuestItem = {
+      ...quest,
+      isCompleted: true,
+      snoozeUntilTimestamp: null,
+      completedMemoryId: enrichedMemory.id
+    };
+
+    void saveMemory(appState.roomCode, enrichedMemory).catch((err) =>
+      console.error('Failed to immediately save completed quest memory:', err)
+    );
+    void saveQuest(appState.roomCode, completedQuest).catch((err) =>
+      console.error('Failed to immediately save completed quest:', err)
+    );
+
     updateSharedState((prev) => {
       const currentQuest = prev.quests.find((item) => item.id === quest.id);
       if (!currentQuest || currentQuest.isCompleted || currentQuest.forPartner !== activePartner) return prev;
       const completedQuests = prev.quests.map((q) =>
-        q.id === quest.id
-          ? { ...q, isCompleted: true, snoozeUntilTimestamp: null, completedMemoryId: memory.id }
-          : q
+        q.id === quest.id ? completedQuest : q
       );
       return {
         ...prev,
         totalCompletedQuests: prev.totalCompletedQuests + 1,
-        completedCountsByPartner: {
-          ...prev.completedCountsByPartner,
-          [activePartner]: (prev.completedCountsByPartner?.[activePartner] || 0) + 1
-        },
         quests: completedQuests,
-        memories: [memory, ...prev.memories]
+        memories: [enrichedMemory, ...prev.memories]
       };
     });
 
     setCompletingQuest(null);
-    setUnlockedPolaroidModal(memory);
+    setUnlockedPolaroidModal(enrichedMemory);
   };
 
-  // Send Chat Message (Synced via WebSocket & BroadcastChannel to the partner's phone)
-  const handleSendMessage = (customText?: string, isSpark = false) => {
+  // Send Chat Message; Firestore snapshots deliver it to the other device immediately.
+  const handleSendMessage = (customText?: string, isSpark = false, photoUrl?: string) => {
     const text = (customText !== undefined ? customText : chatDraft).trim();
-    if (!text) return;
+    if (!text && !photoUrl) return;
 
     soundEngine.playCardFlip();
     emitTypingSignal(false);
-    const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const now = Date.now();
+    const formattedTime = new Date(now).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const newMsg: ChatMessage = {
-      id: 'msg-' + Date.now(),
+      id: `msg-${now}-${Math.random().toString(36).slice(2, 6)}`,
       senderId: activePartner,
-      text,
+      text: text || '📸 Sent a photo',
+      ...(photoUrl ? { photoUrl } : {}),
       timestamp: formattedTime,
       reactions: {},
       isSystemSpark: isSpark,
-      seenByPartner: false
+      seenByPartner: false,
+      createdAt: now
     };
+
+    knownMessageIdsRef.current.add(newMsg.id);
+    void saveChatMessage(appState.roomCode, newMsg).catch((err) =>
+      console.error('Failed to immediately persist chat message:', err)
+    );
 
     updateSharedState((prev) => ({
       ...prev,
@@ -1414,7 +1949,45 @@ export default function App() {
     if (customText === undefined) {
       setChatDraftsByPartner((prev) => ({ ...prev, [activePartner]: '' }));
     }
+  };
 
+  const handleChatPhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    try {
+      const timestamp = new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
+      for (const file of files) {
+        const now = Date.now();
+        const compressedUrl = await compressImageFile(file, 640, 0.78);
+        const caption = chatDraft.trim() || file.name.replace(/\.[^.]+$/, '') || 'Shared in Us Chat ❤️';
+        const vaultMemory: PolaroidMemory = {
+          id: `photo-${now}-${Math.random().toString(36).slice(2, 9)}`,
+          ownerId: activePartner,
+          createdBy: activePartner,
+          photoUrl: compressedUrl,
+          caption,
+          sticker: '💬',
+          washi: 'rose',
+          timestamp,
+          questTitle: 'Us Chat Photo',
+          createdAt: now,
+          updatedAt: now
+        };
+        void saveMemory(appState.roomCode, vaultMemory).catch((err) =>
+          console.error('Failed to save chat photo to Photo Vault:', err)
+        );
+        updateSharedState((prev) => ({
+          ...prev,
+          memories: [vaultMemory, ...prev.memories]
+        }));
+        handleSendMessage(chatDraft.trim() || `📸 ${caption}`, false, compressedUrl);
+      }
+      pushToast('Photo sent & saved! 📸', 'Delivered to chat and saved permanently in Photo Vault.', '📸', 'emerald');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to send the selected photo.';
+      pushToast('Photo upload error', message, '⚠️', 'amber');
+    }
   };
 
   // Toggle Emoji Reaction on Chat Message
@@ -1444,20 +2017,9 @@ export default function App() {
   // Send Heart Ping to Partner's Phone
   const handleSendHeartPing = () => {
     soundEngine.playChime();
-    const packet = {
-      type: 'PARTNER_PING',
-      roomCode: appState.roomCode,
-      fromPartner: activePartner,
-      fromName: currentProfile.name,
-      message: `${currentProfile.name} (${currentProfile.nickname}) sent you a warm Heart Ping! 💓`
-    };
-    try {
-      if (wsAuthenticatedRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify(packet));
-      }
-    } catch {
-      // ignore
-    }
+    void publishPresence(appState.roomCode, activePartner, { pingAt: Date.now() }).catch((error: unknown) => {
+      setAuthError(error instanceof Error ? error.message : 'Could not send your Heart Ping.');
+    });
     pushToast(
       `Heart Ping Sent to ${partnerProfile.name}! 💓`,
       `${partnerProfile.name}'s phone just chimed with your love ping.`,
@@ -1544,19 +2106,28 @@ export default function App() {
     setPhotoUploadError('');
     try {
       const timestamp = new Date().toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' });
-      const memories = await Promise.all(files.map(async (file): Promise<PolaroidMemory> => ({
-        id: `photo-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        ownerId: activePartner,
-        createdBy: activePartner,
-        photoUrl: await compressImageFile(file, 1200, 0.84),
-        caption: file.name.replace(/\.[^.]+$/, ''),
-        sticker: '📷',
-        washi: 'rose',
-        timestamp,
-        questTitle: 'Photo Vault'
-      })));
+      const now = Date.now();
+      const memories = await Promise.all(
+        files.map(async (file, index): Promise<PolaroidMemory> => {
+          const itemTime = now + index;
+          return {
+            id: `photo-${itemTime}-${Math.random().toString(36).slice(2, 9)}`,
+            ownerId: activePartner,
+            createdBy: activePartner,
+            photoUrl: await compressImageFile(file, 640, 0.78),
+            caption: file.name.replace(/\.[^.]+$/, ''),
+            sticker: '📷',
+            washi: 'rose',
+            timestamp,
+            questTitle: 'Photo Vault',
+            createdAt: itemTime,
+            updatedAt: itemTime
+          };
+        })
+      );
       updateSharedState((prev) => ({ ...prev, memories: [...memories, ...prev.memories] }));
-      pushToast('Photos added', `${memories.length} photo${memories.length === 1 ? '' : 's'} added to the shared Photo Vault.`, '📸', 'emerald');
+      await Promise.all(memories.map((memory) => saveMemory(appState.roomCode, memory)));
+      pushToast('Photos added', `${memories.length} photo${memories.length === 1 ? '' : 's'} saved to the shared Photo Vault.`, '📸', 'emerald');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to add the selected photos.';
       setPhotoUploadError(message);
@@ -1564,22 +2135,262 @@ export default function App() {
     }
   };
 
-  // Quests for the currently viewed sub-mode:
-  // 'my-quests': Active partner's own missions to complete (secret rewards hidden until completed!)
-  // 'assign-partner': Set/edit missions & preload secret Polaroids for the OTHER partner!
-  const displayedQuests = useMemo(() => {
-    return appState.quests
-      .filter((q) => q.forPartner === activePartner)
-      .sort((a, b) => {
-        const timeA = a.scheduledAt ? new Date(a.scheduledAt).getTime() : 0;
-        const timeB = b.scheduledAt ? new Date(b.scheduledAt).getTime() : 0;
-        return timeA - timeB;
+  // Summon a random AI / Couple Prompt that pops up on BOTH Aaron & Vini's phones
+  const handleDropSharedPrompt = useCallback(
+    (categoryFilter?: SharedPromptCategory, isSilentAuto = false) => {
+      const currentQuests = appStateRef.current.quests || [];
+      const existingTitles = new Set(
+        currentQuests.filter((q) => q.isSharedPrompt).map((q) => q.title.toLowerCase())
+      );
+      const pool = categoryFilter
+        ? AI_COUPLE_PROMPTS_POOL.filter((item) => item.category === categoryFilter)
+        : AI_COUPLE_PROMPTS_POOL;
+      const unaskedPool = pool.filter((item) => !existingTitles.has(item.title.toLowerCase()));
+      const candidates = unaskedPool.length > 0 ? unaskedPool : pool;
+      const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+      const now = Date.now();
+      const timeLabel = new Date(now).toLocaleString([], {
+        dateStyle: 'medium',
+        timeStyle: 'short'
       });
-  }, [appState.quests, activePartner, otherPartner, questViewSubMode]);
+      const meta = SHARED_PROMPT_CATEGORY_META[chosen.category];
+      const newSharedPrompt: QuestItem = {
+        id: `shared-prompt-${now}-${Math.random().toString(36).slice(2, 7)}`,
+        forPartner: 'aaron',
+        assignedBy: activePartner,
+        slot: 'golden',
+        slotLabel: `${meta.icon} ${meta.label}`,
+        scheduledTime: timeLabel,
+        scheduledAt: new Date(now).toISOString(),
+        assignedAt: new Date(now).toISOString(),
+        title: chosen.title,
+        prompt: chosen.prompt,
+        isUnlocked: true,
+        isCompleted: false,
+        snoozedMinutesTotal: 0,
+        snoozeUntilTimestamp: null,
+        secretReward: null,
+        completedMemoryId: null,
+        createdAt: now,
+        updatedAt: now,
+        isSharedPrompt: true,
+        promptCategory: chosen.category,
+        answers: {}
+      };
+
+      knownQuestIdsRef.current.add(newSharedPrompt.id);
+      poppedPromptIdsRef.current.add(newSharedPrompt.id);
+
+      void saveQuest(appStateRef.current.roomCode, newSharedPrompt).catch((err) =>
+        console.error('Failed to immediately save shared couple prompt:', err)
+      );
+
+      updateSharedState((prev) => ({
+        ...prev,
+        quests: [newSharedPrompt, ...prev.quests]
+      }));
+
+      setActiveSharedPromptModalId(newSharedPrompt.id);
+      soundEngine.playChime();
+      if (!isSilentAuto) {
+        triggerCelebrationConfetti();
+      }
+      pushToast(
+        '✨ AI Couple Prompt Popped Up!',
+        `"${chosen.title}" — Both ${appStateRef.current.profiles.aaron.name} & ${appStateRef.current.profiles.vini.name} have to answer!`,
+        meta.icon,
+        'rose'
+      );
+    },
+    [activePartner, pushToast, updateSharedState]
+  );
+
+  // Automatically pop up a random shared AI prompt when the room has no active unanswered prompt
+  useEffect(() => {
+    if (!authEmail) return;
+    const timer = setTimeout(() => {
+      if (!hasQuestSnapshotRef.current || autoPromptGeneratedRef.current) return;
+      const sharedPrompts = appStateRef.current.quests.filter((q) => q.isSharedPrompt);
+      const unansweredByEither = sharedPrompts.find(
+        (q) => !q.answers?.aaron?.text || !q.answers?.vini?.text
+      );
+      if (unansweredByEither) {
+        // If the current partner hasn't answered it yet, pop it up once per session
+        if (
+          !unansweredByEither.answers?.[activePartner]?.text &&
+          !poppedPromptIdsRef.current.has(unansweredByEither.id)
+        ) {
+          poppedPromptIdsRef.current.add(unansweredByEither.id);
+          setActiveSharedPromptModalId(unansweredByEither.id);
+        }
+        autoPromptGeneratedRef.current = true;
+        return;
+      }
+
+      // If no shared prompt exists or the last one was answered > 4 hours ago, pop up a fresh one!
+      const latestCreatedAt = sharedPrompts.reduce(
+        (max, q) => Math.max(max, extractItemTimestamp(q.id, q.createdAt)),
+        0
+      );
+      if (sharedPrompts.length === 0 || Date.now() - latestCreatedAt > 4 * 60 * 60 * 1000) {
+        autoPromptGeneratedRef.current = true;
+        handleDropSharedPrompt(undefined, true);
+      }
+    }, 2800);
+    return () => clearTimeout(timer);
+  }, [authEmail, activePartner, appState.quests.length, handleDropSharedPrompt]);
+
+  // Submit activePartner's answer to a Shared Couple Prompt
+  const handleSubmitSharedPromptAnswer = (promptQuest: QuestItem, rawAnswer?: string) => {
+    const draftText = (
+      rawAnswer !== undefined ? rawAnswer : sharedPromptDrafts[promptQuest.id] || ''
+    ).trim();
+    if (!draftText) return;
+
+    const now = Date.now();
+    const formattedTime = new Date(now).toLocaleString([], {
+      dateStyle: 'short',
+      timeStyle: 'short'
+    });
+    const myAnswer: SharedPromptAnswer = {
+      text: draftText,
+      answeredAt: formattedTime,
+      timestamp: now
+    };
+    const nextAnswers: Partial<Record<PartnerId, SharedPromptAnswer>> = {
+      ...(promptQuest.answers || {}),
+      [activePartner]: myAnswer
+    };
+    const bothCompleted = Boolean(nextAnswers.aaron?.text && nextAnswers.vini?.text);
+
+    if (bothCompleted) {
+      soundEngine.playFanfare();
+      triggerCelebrationConfetti();
+    } else {
+      soundEngine.playChime();
+    }
+
+    void saveSharedPromptAnswer(
+      appState.roomCode,
+      promptQuest.id,
+      activePartner,
+      myAnswer,
+      bothCompleted
+    ).catch((err) => console.error('Failed to persist shared prompt answer:', err));
+
+    updateSharedState((prev) => ({
+      ...prev,
+      totalCompletedQuests: bothCompleted ? prev.totalCompletedQuests + 1 : prev.totalCompletedQuests,
+      quests: prev.quests.map((q) =>
+        q.id === promptQuest.id
+          ? {
+              ...q,
+              answers: {
+                ...(q.answers || {}),
+                [activePartner]: myAnswer
+              },
+              isCompleted: Boolean(
+                (activePartner === 'aaron' ? myAnswer.text : q.answers?.aaron?.text) &&
+                  (activePartner === 'vini' ? myAnswer.text : q.answers?.vini?.text)
+              ),
+              updatedAt: now
+            }
+          : q
+      )
+    }));
+
+    setSharedPromptDrafts((prev) => ({ ...prev, [promptQuest.id]: '' }));
+
+    // Also share a spark note in Us Chat so both partners see it in their permanent chat history
+    handleSendMessage(
+      `🤖✨ Answered "${promptQuest.title}": ${draftText}`,
+      true
+    );
+
+    if (bothCompleted) {
+      pushToast(
+        'Both Answers Unlocked! 🎉',
+        `You and ${partnerProfile.name} both answered "${promptQuest.title}"!`,
+        '💖',
+        'emerald'
+      );
+    } else {
+      pushToast(
+        'Answer Locked In! ✨',
+        `Saved! Both answers will reveal as soon as ${partnerProfile.name} answers.`,
+        '🔒',
+        'amber'
+      );
+    }
+  };
+
+  const myQuestsList = useMemo(
+    () =>
+      appState.quests
+        .filter((q) => !q.isSharedPrompt && q.forPartner === activePartner)
+        .sort((a, b) => {
+          if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+          const timeA = a.scheduledAt ? new Date(a.scheduledAt).getTime() : extractItemTimestamp(a.id, a.createdAt);
+          const timeB = b.scheduledAt ? new Date(b.scheduledAt).getTime() : extractItemTimestamp(b.id, b.createdAt);
+          return timeB - timeA;
+        }),
+    [appState.quests, activePartner]
+  );
+
+  // Challenges set BY activePartner FOR otherPartner (e.g. Vini's list of challenges set for Aaron)
+  const challengesSetForPartnerList = useMemo(
+    () =>
+      appState.quests
+        .filter((q) => !q.isSharedPrompt && q.forPartner === otherPartner)
+        .sort((a, b) => {
+          if (a.isCompleted !== b.isCompleted) return a.isCompleted ? 1 : -1;
+          const timeA = a.scheduledAt ? new Date(a.scheduledAt).getTime() : extractItemTimestamp(a.id, a.createdAt);
+          const timeB = b.scheduledAt ? new Date(b.scheduledAt).getTime() : extractItemTimestamp(b.id, b.createdAt);
+          return timeB - timeA;
+        }),
+    [appState.quests, otherPartner]
+  );
+
+  // Shared AI / Random Couple Prompts that BOTH Aaron & Vini answer
+  const sharedPromptsList = useMemo(
+    () =>
+      appState.quests
+        .filter((q) => Boolean(q.isSharedPrompt))
+        .sort((a, b) => extractItemTimestamp(b.id, b.createdAt) - extractItemTimestamp(a.id, a.createdAt)),
+    [appState.quests]
+  );
+
+  const activeSharedPrompt = useMemo(
+    () =>
+      sharedPromptsList.find((q) => !q.answers?.aaron?.text || !q.answers?.vini?.text) ||
+      sharedPromptsList[0] ||
+      null,
+    [sharedPromptsList]
+  );
+
+  const activeModalSharedPrompt = useMemo(
+    () =>
+      activeSharedPromptModalId
+        ? sharedPromptsList.find((q) => q.id === activeSharedPromptModalId) || null
+        : null,
+    [activeSharedPromptModalId, sharedPromptsList]
+  );
+
+  // Quests for the currently viewed sub-mode:
+  // 'my-quests': Active partner's own challenges to complete
+  // 'assign-partner': Challenges set for the OTHER partner (so Vini sees all challenges she set for Aaron!)
+  const displayedQuests = useMemo(() => {
+    if (questViewSubMode === 'assign-partner') {
+      return challengesSetForPartnerList;
+    }
+    return myQuestsList;
+  }, [questViewSubMode, challengesSetForPartnerList, myQuestsList]);
 
   const myUncompletedCount = useMemo(
-    () => appState.quests.filter((q) => q.forPartner === activePartner && q.isUnlocked && !q.isCompleted).length,
-    [appState.quests, activePartner]
+    () =>
+      myQuestsList.filter((q) => q.isUnlocked && !q.isCompleted).length +
+      sharedPromptsList.filter((q) => !q.answers?.[activePartner]?.text).length,
+    [myQuestsList, sharedPromptsList, activePartner]
   );
 
   const unseenChatCount = useMemo(
@@ -1630,16 +2441,30 @@ export default function App() {
 
   return (
     <div
-      style={{
-        backgroundColor: isDarkMode ? '#171411' : currentProfile.backgroundColor || '#FAF7F2',
-        backgroundImage: isDarkMode ? 'none' :
-          'radial-gradient(at 15% 10%, rgba(244, 63, 94, 0.07) 0px, transparent 50%), radial-gradient(at 85% 85%, rgba(217, 119, 6, 0.08) 0px, transparent 55%)',
-        fontFamily: "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif",
-        color: isDarkMode ? '#f5f5f4' : '#292524'
-      }}
-      className={`min-h-screen flex flex-col selection:bg-rose-200 selection:text-rose-900 ${isDarkMode ? 'sidequests-dark' : ''}`}
+      style={
+        {
+          backgroundColor: activeSiteTheme.bgPrimary,
+          backgroundImage: activeSiteTheme.bgPageRadial,
+          fontFamily: "'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif",
+          color: activeSiteTheme.textPrimary,
+          '--sq-bg': activeSiteTheme.bgPrimary,
+          '--sq-surface': activeSiteTheme.bgSurface,
+          '--sq-surface-soft': activeSiteTheme.bgSurfaceSoft,
+          '--sq-header-bg': activeSiteTheme.bgHeader,
+          '--sq-banner-grad': activeSiteTheme.bgBannerGradient,
+          '--sq-text': activeSiteTheme.textPrimary,
+          '--sq-text-secondary': activeSiteTheme.textSecondary,
+          '--sq-text-muted': activeSiteTheme.textMuted,
+          '--sq-border': activeSiteTheme.borderPrimary,
+          '--sq-accent': activeSiteTheme.accentPrimary,
+          '--sq-accent-grad': activeSiteTheme.accentGradient
+        } as React.CSSProperties
+      }
+      className={`min-h-screen flex flex-col selection:bg-rose-200 selection:text-rose-900 sidequests-theme theme-${activeSiteTheme.id} ${
+        isDarkMode ? 'sidequests-dark' : 'sidequests-light'
+      }`}
     >
-      {/* Google Fonts & 3D Flip / Polaroid / Wax Stamp Custom Keyframe Styles */}
+      {/* Google Fonts & Complete Multi-Theme / Dark-Mode Contrast Styles */}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Caveat:wght@600;700&family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
 
@@ -1652,27 +2477,154 @@ export default function App() {
         .perspective-1200 {
           perspective: 1200px;
         }
+
+        /* Universal Theme Variable Overrides (Light & Dark Palettes) */
+        .sidequests-theme header.sticky {
+          background-color: var(--sq-header-bg) !important;
+          border-color: var(--sq-border) !important;
+        }
+        .sidequests-theme .bg-\\[\\#FAF7F2\\],
+        .sidequests-theme .bg-\\[\\#FAF7F2\\]\\/90 {
+          background-color: var(--sq-bg) !important;
+          color: var(--sq-text) !important;
+        }
+        .sidequests-theme [class*="via-white"] {
+          background-image: var(--sq-banner-grad) !important;
+          border-color: var(--sq-border) !important;
+        }
+
+        /* Comprehensive Dark Mode Fixes — No Whitened-Out Blocks or Unreadable Text */
         .sidequests-dark .bg-white,
         .sidequests-dark .bg-white\\/80,
         .sidequests-dark .bg-white\\/85,
         .sidequests-dark .bg-white\\/90,
         .sidequests-dark .bg-white\\/95,
+        .sidequests-dark nav.fixed {
+          background-color: var(--sq-surface) !important;
+          color: var(--sq-text) !important;
+          border-color: var(--sq-border) !important;
+        }
         .sidequests-dark .bg-stone-50,
-        .sidequests-dark .bg-stone-100 {
-          background-color: #292524 !important;
-          color: #f5f5f4 !important;
+        .sidequests-dark .bg-stone-50\\/90,
+        .sidequests-dark .bg-stone-100,
+        .sidequests-dark .bg-stone-100\\/85,
+        .sidequests-dark .bg-stone-100\\/90,
+        .sidequests-dark .bg-stone-200,
+        .sidequests-dark .bg-stone-200\\/60,
+        .sidequests-dark .bg-stone-200\\/70,
+        .sidequests-dark .bg-stone-200\\/80 {
+          background-color: var(--sq-surface-soft) !important;
+          color: var(--sq-text) !important;
+          border-color: var(--sq-border) !important;
+        }
+        .sidequests-dark [class*="from-amber-100"],
+        .sidequests-dark [class*="from-rose-50"],
+        .sidequests-dark [class*="from-amber-50"] {
+          background-image: var(--sq-banner-grad) !important;
+          border-color: var(--sq-border) !important;
+        }
+        .sidequests-dark .polaroid-paper {
+          background-color: var(--sq-surface-soft) !important;
+          background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 0) !important;
+          border-color: var(--sq-border) !important;
+          color: var(--sq-text) !important;
+          box-shadow: 0 12px 28px -6px rgba(0, 0, 0, 0.55) !important;
+        }
+        .sidequests-dark .bg-rose-50,
+        .sidequests-dark .bg-rose-50\\/70,
+        .sidequests-dark .bg-rose-50\\/90,
+        .sidequests-dark .bg-rose-100,
+        .sidequests-dark .bg-rose-100\\/80 {
+          background-color: rgba(244, 63, 94, 0.16) !important;
+          border-color: rgba(244, 63, 94, 0.35) !important;
+          color: #FFE4E6 !important;
+        }
+        .sidequests-dark .bg-amber-50,
+        .sidequests-dark .bg-amber-50\\/70,
+        .sidequests-dark .bg-amber-50\\/90,
+        .sidequests-dark .bg-amber-50\\/95,
+        .sidequests-dark .bg-amber-100,
+        .sidequests-dark .bg-amber-100\\/80,
+        .sidequests-dark .bg-amber-200\\/60,
+        .sidequests-dark .bg-amber-200\\/70,
+        .sidequests-dark .bg-amber-200\\/80 {
+          background-color: rgba(245, 158, 11, 0.16) !important;
+          border-color: rgba(245, 158, 11, 0.35) !important;
+          color: #FEF3C7 !important;
+        }
+        .sidequests-dark .bg-emerald-50,
+        .sidequests-dark .bg-emerald-50\\/95,
+        .sidequests-dark .bg-emerald-100 {
+          background-color: rgba(16, 185, 129, 0.16) !important;
+          border-color: rgba(16, 185, 129, 0.35) !important;
+          color: #D1FAE5 !important;
+        }
+        .sidequests-dark .bg-purple-100 {
+          background-color: rgba(168, 85, 247, 0.2) !important;
+          border-color: rgba(168, 85, 247, 0.4) !important;
+          color: #F3E8FF !important;
         }
         .sidequests-dark .text-stone-900,
-        .sidequests-dark .text-stone-800,
+        .sidequests-dark .text-stone-800 {
+          color: var(--sq-text) !important;
+        }
         .sidequests-dark .text-stone-700,
         .sidequests-dark .text-stone-600 {
-          color: #e7e5e4 !important;
+          color: var(--sq-text-secondary) !important;
+        }
+        .sidequests-dark .text-stone-500,
+        .sidequests-dark .text-stone-400 {
+          color: var(--sq-text-muted) !important;
+        }
+        .sidequests-dark .text-rose-950,
+        .sidequests-dark .text-rose-900,
+        .sidequests-dark .text-rose-800,
+        .sidequests-dark .text-rose-700,
+        .sidequests-dark .text-rose-600 {
+          color: #FDA4AF !important;
+        }
+        .sidequests-dark .text-amber-950,
+        .sidequests-dark .text-amber-900,
+        .sidequests-dark .text-amber-800,
+        .sidequests-dark .text-amber-700 {
+          color: #FCD34D !important;
+        }
+        .sidequests-dark .text-emerald-950,
+        .sidequests-dark .text-emerald-900,
+        .sidequests-dark .text-emerald-800,
+        .sidequests-dark .text-emerald-700 {
+          color: #6EE7B7 !important;
+        }
+        .sidequests-dark .text-purple-800 {
+          color: #D8B4FE !important;
+        }
+        .sidequests-dark .border-stone-100,
+        .sidequests-dark .border-stone-200,
+        .sidequests-dark .border-stone-200\\/70,
+        .sidequests-dark .border-stone-200\\/80,
+        .sidequests-dark .border-stone-200\\/90,
+        .sidequests-dark .border-stone-300,
+        .sidequests-dark .border-stone-300\\/50,
+        .sidequests-dark .border-rose-100,
+        .sidequests-dark .border-rose-200,
+        .sidequests-dark .border-rose-200\\/60,
+        .sidequests-dark .border-rose-200\\/70,
+        .sidequests-dark .border-rose-200\\/80,
+        .sidequests-dark .border-rose-200\\/90,
+        .sidequests-dark .border-amber-200,
+        .sidequests-dark .border-amber-200\\/80 {
+          border-color: var(--sq-border) !important;
         }
         .sidequests-dark input,
-        .sidequests-dark textarea {
-          background-color: #1c1917 !important;
-          color: #f5f5f4 !important;
-          border-color: #57534e !important;
+        .sidequests-dark textarea,
+        .sidequests-dark select {
+          background-color: var(--sq-bg) !important;
+          color: var(--sq-text) !important;
+          border-color: var(--sq-border) !important;
+        }
+        .sidequests-dark input::placeholder,
+        .sidequests-dark textarea::placeholder {
+          color: var(--sq-text-muted) !important;
         }
         .preserve-3d {
           transform-style: preserve-3d;
@@ -1735,10 +2687,13 @@ export default function App() {
       {/* Sticky Top Navigation Bar (TopNav) */}
       <header className="sticky top-0 z-40 backdrop-blur-md bg-[#FAF7F2]/90 border-b border-rose-200/60">
         <div className="max-w-2xl mx-auto px-4 pt-3 pb-2.5">
-          {/* Row 1: Brand Title, Device Lock Badge, Streak Counter, Sound & Profile Customize */}
+          {/* Row 1: Brand Title, Device Lock Badge, Streak Counter, Theme Picker, Sound & Profile Customize */}
           <div className="flex items-center justify-between gap-2 mb-2.5">
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-rose-500 to-amber-500 flex items-center justify-center text-white shadow-sm shadow-rose-300/50">
+              <div
+                style={{ backgroundImage: activeSiteTheme.accentGradient }}
+                className="w-10 h-10 rounded-2xl flex items-center justify-center text-white shadow-sm"
+              >
                 <Heart className="w-5 h-5 fill-white" />
               </div>
               <div>
@@ -1782,15 +2737,15 @@ export default function App() {
                 title="Setup Two-Phone Live Sync & Device Privacy Lock"
               >
                 <Smartphone className="w-4 h-4 text-emerald-600" />
-                <span className="hidden sm:inline">2-Phone Live Sync</span>
+                <span className="hidden sm:inline">2-Phone Sync</span>
               </button>
 
-              {/* Burning Heart Streak Pill */}
+              {/* Completed Drops Counter Pill */}
               <button
                 type="button"
-                aria-label={`Completed challenges: Aaron ${appState.completedCountsByPartner.aaron}, Vini ${appState.completedCountsByPartner.vini}`}
-                className="min-h-[44px] px-3 py-1.5 rounded-2xl bg-gradient-to-r from-amber-100/90 to-rose-100/90 border border-amber-300/70 flex items-center gap-1.5 shadow-xs"
-                title="Completed challenges across all time"
+                aria-label={`Completed Love Drops: Aaron ${appState.completedCountsByPartner.aaron}, Vini ${appState.completedCountsByPartner.vini}`}
+                className="min-h-[44px] px-2.5 py-1.5 rounded-2xl bg-gradient-to-r from-amber-100/90 to-rose-100/90 border border-amber-300/70 flex items-center gap-1.5 shadow-xs"
+                title="Completed Love Drops & SideQuests across all time"
               >
                 <Check className="w-4 h-4 text-emerald-700" />
                 <span className="text-[11px] font-bold text-stone-800">
@@ -1798,14 +2753,30 @@ export default function App() {
                 </span>
               </button>
 
+              {/* Site Theme Picker Trigger */}
               <button
                 type="button"
-                onClick={() => setIsDarkMode((dark) => !dark)}
+                onClick={() => {
+                  soundEngine.playCardFlip();
+                  setIsThemeModalOpen(true);
+                }}
+                className="min-h-[44px] px-2.5 py-1.5 rounded-2xl bg-white/80 border border-stone-200/80 flex items-center gap-1.5 text-xs font-bold text-stone-700 hover:text-rose-600 transition"
+                aria-label="Change site theme"
+                title={`Theme: ${activeSiteTheme.name} (Tap to explore 8 themes)`}
+              >
+                <span className="text-base leading-none">{activeSiteTheme.icon}</span>
+                <span className="hidden md:inline">Themes</span>
+              </button>
+
+              {/* Quick Dark / Light Toggle */}
+              <button
+                type="button"
+                onClick={handleToggleDarkMode}
                 className="min-w-[44px] min-h-[44px] rounded-2xl bg-white/80 border border-stone-200/80 flex items-center justify-center text-stone-600 hover:text-rose-600 transition"
                 aria-label={isDarkMode ? 'Switch to light mode' : 'Switch to dark mode'}
-                title={isDarkMode ? 'Light mode' : 'Dark mode'}
+                title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
               >
-                {isDarkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
               </button>
 
               {/* Sound Mute Toggle */}
@@ -1835,9 +2806,9 @@ export default function App() {
             </div>
           </div>
 
-          {/* Row 2: Private Device Mode Bar OR Unlocked Role Switcher */}
+          {/* Row 2: 3-Mode Love Drops Switcher (For Me / Sent to Partner / Shared AI Prompts) */}
           {isDeviceLocked ? (
-            <div className="grid grid-cols-2 gap-1.5 p-1 rounded-2xl bg-stone-200/60 border border-stone-300/50">
+            <div className="grid grid-cols-3 gap-1.5 p-1 rounded-2xl bg-stone-200/60 border border-stone-300/50">
               <button
                 type="button"
                 onClick={() => {
@@ -1845,26 +2816,25 @@ export default function App() {
                   setQuestViewSubMode('my-quests');
                   setActiveTab('quests');
                 }}
-                className={`min-h-[44px] px-3 py-2 rounded-xl flex items-center justify-between transition-all ${
+                className={`min-h-[44px] px-2.5 py-2 rounded-xl flex items-center justify-between gap-1 transition-all ${
                   questViewSubMode === 'my-quests'
                     ? 'bg-white text-stone-900 shadow-sm border border-rose-200/80'
                     : 'text-stone-600 hover:text-stone-900 hover:bg-white/40'
                 }`}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-lg leading-none">{currentProfile.avatar}</span>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base leading-none shrink-0">{currentProfile.avatar}</span>
                   <div className="text-left truncate">
-                    <p className="text-xs font-bold leading-tight truncate">
-                      My challenges ({currentProfile.name})
+                    <p className="text-[11px] font-bold leading-tight truncate">
+                      For Me ({currentProfile.name})
                     </p>
-                    <p className="text-[10px] text-stone-500 truncate">
-                      Pending + completed
+                    <p className="text-[9px] text-stone-500 truncate">
+                      Photos &amp; SideQuests
                     </p>
                   </div>
                 </div>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-500 text-white shrink-0">
-                  {appState.quests.filter((q) => q.forPartner === activePartner && q.isCompleted).length}/
-                  {appState.quests.filter((q) => q.forPartner === activePartner).length}
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-rose-500 text-white shrink-0">
+                  {myQuestsList.filter((q) => q.isCompleted).length}/{myQuestsList.length}
                 </span>
               </button>
 
@@ -1875,25 +2845,56 @@ export default function App() {
                   setQuestViewSubMode('assign-partner');
                   setActiveTab('quests');
                 }}
-                className={`min-h-[44px] px-3 py-2 rounded-xl flex items-center justify-between transition-all ${
+                className={`min-h-[44px] px-2.5 py-2 rounded-xl flex items-center justify-between gap-1 transition-all ${
                   questViewSubMode === 'assign-partner'
                     ? 'bg-white text-stone-900 shadow-sm border border-amber-300/80'
                     : 'text-stone-600 hover:text-stone-900 hover:bg-white/40'
                 }`}
               >
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-lg leading-none">🎁</span>
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base leading-none shrink-0">📸</span>
                   <div className="text-left truncate">
-                    <p className="text-xs font-bold leading-tight truncate">
-                      Assign to {partnerProfile.name}
+                    <p className="text-[11px] font-bold leading-tight truncate">
+                      Sent to {partnerProfile.name}
                     </p>
-                    <p className="text-[10px] text-stone-500 truncate">
-                      Pick a custom challenge date and time
+                    <p className="text-[9px] text-stone-500 truncate">
+                      Drops by {currentProfile.name}
                     </p>
                   </div>
                 </div>
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-amber-500 text-white shrink-0">
-                  Edit
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-500 text-white shrink-0">
+                  {challengesSetForPartnerList.filter((q) => q.isCompleted).length}/{challengesSetForPartnerList.length}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playCardFlip();
+                  setQuestViewSubMode('shared-prompts');
+                  setActiveTab('quests');
+                }}
+                className={`min-h-[44px] px-2.5 py-2 rounded-xl flex items-center justify-between gap-1 transition-all ${
+                  questViewSubMode === 'shared-prompts'
+                    ? 'bg-white text-stone-900 shadow-sm border border-rose-300/80'
+                    : 'text-stone-600 hover:text-stone-900 hover:bg-white/40'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-base leading-none shrink-0">🤖</span>
+                  <div className="text-left truncate">
+                    <p className="text-[11px] font-bold leading-tight truncate">
+                      Both of Us ✨
+                    </p>
+                    <p className="text-[9px] text-stone-500 truncate">
+                      AI Prompts &amp; Qs
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500 to-amber-500 text-white shrink-0">
+                  {sharedPromptsList.filter((q) => !q.answers?.[activePartner]?.text).length > 0
+                    ? `${sharedPromptsList.filter((q) => !q.answers?.[activePartner]?.text).length} New`
+                    : `${sharedPromptsList.filter((q) => q.isCompleted).length} ✓`}
                 </span>
               </button>
             </div>
@@ -1903,9 +2904,9 @@ export default function App() {
                 const prof = appState.profiles[pid];
                 const isSelected = activePartner === pid;
                 const partnerCompleted = appState.quests.filter(
-                  (q) => q.forPartner === pid && q.isCompleted
+                  (q) => !q.isSharedPrompt && q.forPartner === pid && q.isCompleted
                 ).length;
-                const partnerQuestCount = appState.quests.filter((q) => q.forPartner === pid).length;
+                const partnerQuestCount = appState.quests.filter((q) => !q.isSharedPrompt && q.forPartner === pid).length;
                 return (
                   <button
                     key={pid}
@@ -1946,68 +2947,312 @@ export default function App() {
       {/* Main Content Container */}
       <main className="flex-1 max-w-2xl w-full mx-auto px-4 pt-4 pb-28">
         {/* ================================================================= */}
-        {/* TAB 1: DAILY TIMED QUEST TIMELINE & MYSTERY DROPS                 */}
+        {/* TAB 1: DAILY TIMED QUEST TIMELINE, PARTNER LIST & AI PROMPTS      */}
         {/* ================================================================= */}
         {activeTab === 'quests' && (
           <div className="space-y-4">
-            {/* Custom challenge creation */}
+            {/* Live Shared AI / Random Couple Prompt Spotlight Banner (Always accessible) */}
+            {questViewSubMode !== 'shared-prompts' && (
+              <div className="rounded-3xl p-4 bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-rose-500/10 border-2 border-rose-300/80 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div className="flex items-start gap-3">
+                    <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-rose-500 to-amber-500 text-white flex items-center justify-center text-xl shadow-xs shrink-0">
+                      🤖
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-600 text-white">
+                          Both Must Answer ✨
+                        </span>
+                        {activeSharedPrompt && (
+                          <span className="text-[11px] font-bold text-stone-600">
+                            {activeSharedPrompt.answers?.aaron?.text ? 'Aaron ✓' : 'Aaron ⏳'} •{' '}
+                            {activeSharedPrompt.answers?.vini?.text ? 'Vini ✓' : 'Vini ⏳'}
+                          </span>
+                        )}
+                      </div>
+                      <h3 className="font-editorial font-bold text-base text-stone-900 mt-1">
+                        {activeSharedPrompt
+                          ? activeSharedPrompt.title
+                          : 'Pop Up a Random AI Challenge or Question for Both of Us!'}
+                      </h3>
+                      <p className="text-xs text-stone-700 mt-0.5 leading-relaxed">
+                        {activeSharedPrompt
+                          ? activeSharedPrompt.prompt
+                          : 'Tap below to summon a spontaneous question or mini-challenge that pops up on both Aaron & Vini’s phones.'}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {activeSharedPrompt && (
+                      <button
+                        type="button"
+                        onClick={() => setActiveSharedPromptModalId(activeSharedPrompt.id)}
+                        className="min-h-[40px] px-3.5 py-2 rounded-2xl bg-stone-900 text-white text-xs font-bold hover:bg-stone-800 transition"
+                      >
+                        {activeSharedPrompt.answers?.[activePartner]?.text
+                          ? 'View Answers 👀'
+                          : 'Answer Now ✍️'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => handleDropSharedPrompt()}
+                      className="min-h-[40px] px-3.5 py-2 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white text-xs font-bold shadow-xs hover:brightness-105 transition flex items-center gap-1.5"
+                    >
+                      <Dices className="w-4 h-4" />
+                      <span>Random AI Prompt 🎲</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Header banner for current sub-mode */}
             <div className="rounded-3xl p-4 bg-gradient-to-br from-rose-50 via-white to-amber-50 border border-rose-200/70 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div className="flex items-start gap-3">
                 <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-200 flex items-center justify-center text-2xl shrink-0">
-                  {questViewSubMode === 'assign-partner' ? partnerProfile.avatar : currentProfile.avatar}
+                  {questViewSubMode === 'assign-partner'
+                    ? '📸'
+                    : questViewSubMode === 'shared-prompts'
+                    ? '🤖'
+                    : currentProfile.avatar}
                 </div>
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h2 className="font-editorial font-bold text-lg text-stone-900">
                       {questViewSubMode === 'assign-partner'
-                        ? `Challenges for ${partnerProfile.name}`
-                        : `${currentProfile.name}'s Challenges`}
+                        ? `Love Drops & SideQuests Sent to ${partnerProfile.name}`
+                        : questViewSubMode === 'shared-prompts'
+                        ? `AI & Random Couple Prompts (Aaron & Vini)`
+                        : `${currentProfile.name}'s Love Drops & SideQuests`}
                     </h2>
                     <span className="text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-medium">
                       {questViewSubMode === 'assign-partner'
-                        ? `Assigned by ${currentProfile.name}`
-                        : 'Your assigned challenges'}
+                        ? `${challengesSetForPartnerList.length} sent by ${currentProfile.name}`
+                        : questViewSubMode === 'shared-prompts'
+                        ? 'Both partners answer'
+                        : `From ${partnerProfile.name} for you`}
                     </span>
                   </div>
                   <p className="text-xs text-stone-600 mt-0.5">
                     {questViewSubMode === 'assign-partner'
-                      ? `Choose any date and time. ${partnerProfile.name} will be notified when the challenge syncs to their device.`
-                      : 'Challenges assigned to you appear here, including pending and completed ones.'}
+                      ? `Send a random photo just to show ${partnerProfile.name} what you're up to, or post a fun SideQuest! Everything you send stays listed here.`
+                      : questViewSubMode === 'shared-prompts'
+                      ? `Random AI questions and mini-prompts pop up for both of you. Submit your answer to unlock ${partnerProfile.name}'s response!`
+                      : `Photo Drops and SideQuests sent to you by ${partnerProfile.name} appear right here.`}
                   </p>
                 </div>
               </div>
 
-              {questViewSubMode === 'assign-partner' && (
-              <button
-                type="button"
-                onClick={() => {
-                  setChallengeTitle('');
-                  setChallengePrompt('');
-                  setChallengeDateTime('');
-                  setIsCreateChallengeOpen(true);
-                }}
-                className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white font-bold text-xs shadow-md hover:brightness-105 active:scale-95 transition flex items-center justify-center gap-2 shrink-0"
-              >
-                <span>Create challenge for {partnerProfile.name}</span>
-              </button>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {questViewSubMode === 'shared-prompts' ? (
+                  <button
+                    type="button"
+                    onClick={() => handleDropSharedPrompt()}
+                    className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white font-bold text-xs shadow-md hover:brightness-105 active:scale-95 transition flex items-center justify-center gap-2"
+                  >
+                    <Dices className="w-4 h-4" />
+                    <span>Pop Up Random Prompt for Both 🎲</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setChallengeDropType('photo-drop');
+                      setChallengeTitle('');
+                      setChallengePrompt('');
+                      setChallengeDateTime('');
+                      setChallengePhotoUrl('');
+                      setIsCreateChallengeOpen(true);
+                    }}
+                    className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white font-bold text-xs shadow-md hover:brightness-105 active:scale-95 transition flex items-center justify-center gap-2"
+                  >
+                    <Camera className="w-4 h-4" />
+                    <span>Send Photo or SideQuest to {partnerProfile.name}</span>
+                  </button>
+                )}
+              </div>
             </div>
 
-            {questViewSubMode === 'assign-partner' ? (
-              <div className="rounded-3xl p-5 text-center bg-white/85 border border-stone-200">
-                <p className="font-bold text-stone-800">Assignment view</p>
-                <p className="text-xs text-stone-500 mt-1">
-                  You can create challenges for {partnerProfile.name}, but cannot view their challenge list.
-                </p>
+            {questViewSubMode === 'shared-prompts' ? (
+              <div className="space-y-4">
+                {/* Category Quick-Summon Bar */}
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {(Object.keys(SHARED_PROMPT_CATEGORY_META) as SharedPromptCategory[]).map((cat) => {
+                    const meta = SHARED_PROMPT_CATEGORY_META[cat];
+                    return (
+                      <button
+                        key={cat}
+                        type="button"
+                        onClick={() => handleDropSharedPrompt(cat)}
+                        className="min-h-[40px] px-3.5 py-1.5 rounded-2xl bg-white hover:bg-rose-50 border border-stone-200 hover:border-rose-300 text-xs font-bold text-stone-700 flex items-center gap-1.5 shrink-0 shadow-2xs transition"
+                      >
+                        <span>{meta.icon}</span>
+                        <span>+ {meta.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {sharedPromptsList.length === 0 ? (
+                  <div className="rounded-3xl p-6 text-center bg-white/85 border border-stone-200 space-y-3">
+                    <p className="font-bold text-stone-800">No shared couple prompts yet</p>
+                    <p className="text-xs text-stone-500">
+                      Tap &ldquo;Pop Up Random Prompt for Both&rdquo; above to drop a question or challenge onto both phones!
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {sharedPromptsList.map((promptItem) => {
+                      const myAns = promptItem.answers?.[activePartner];
+                      const partnerAns = promptItem.answers?.[otherPartner];
+                      const bothDone = Boolean(myAns?.text && partnerAns?.text);
+                      const catMeta = promptItem.promptCategory
+                        ? SHARED_PROMPT_CATEGORY_META[promptItem.promptCategory]
+                        : SHARED_PROMPT_CATEGORY_META['deep-question'];
+                      const draftVal = sharedPromptDrafts[promptItem.id] || '';
+
+                      return (
+                        <div
+                          key={promptItem.id}
+                          className={`rounded-3xl p-5 border transition-all ${
+                            bothDone
+                              ? 'bg-white/95 border-emerald-200 shadow-xs'
+                              : 'bg-white border-rose-300 shadow-md shadow-rose-100/50'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between gap-2 flex-wrap pb-3 border-b border-stone-100">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span
+                                className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${catMeta.badgeClass}`}
+                              >
+                                {catMeta.icon} {catMeta.label}
+                              </span>
+                              <span className="text-xs text-stone-400 flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                {promptItem.scheduledTime}
+                              </span>
+                            </div>
+                            <span
+                              className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                                bothDone
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-amber-100 text-amber-900'
+                              }`}
+                            >
+                              {bothDone
+                                ? '💖 Both Answered!'
+                                : `${myAns?.text ? 'You ✓' : 'You ⏳'} • ${
+                                    partnerAns?.text
+                                      ? `${partnerProfile.name} ✓`
+                                      : `${partnerProfile.name} ⏳`
+                                  }`}
+                            </span>
+                          </div>
+
+                          <div className="py-3.5">
+                            <h3 className="font-editorial font-bold text-lg text-stone-900">
+                              {promptItem.title}
+                            </h3>
+                            <p className="text-sm text-stone-700 mt-1 leading-relaxed">
+                              {promptItem.prompt}
+                            </p>
+                          </div>
+
+                          {/* Answer Input if current partner hasn't answered yet */}
+                          {!myAns?.text ? (
+                            <form
+                              onSubmit={(e) => {
+                                e.preventDefault();
+                                handleSubmitSharedPromptAnswer(promptItem);
+                              }}
+                              className="space-y-2.5 pt-2 border-t border-stone-100"
+                            >
+                              {partnerAns?.text && (
+                                <div className="p-2.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 font-semibold flex items-center gap-2">
+                                  <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                                  <span>
+                                    {partnerProfile.name} has already answered! Submit your answer below to unlock {partnerProfile.name}&apos;s response.
+                                  </span>
+                                </div>
+                              )}
+                              <textarea
+                                rows={2}
+                                required
+                                value={draftVal}
+                                onChange={(e) =>
+                                  setSharedPromptDrafts((prev) => ({
+                                    ...prev,
+                                    [promptItem.id]: e.target.value
+                                  }))
+                                }
+                                placeholder={`Write your answer as ${currentProfile.name}...`}
+                                className="w-full p-3 rounded-2xl bg-stone-50 border border-stone-200 text-sm focus:outline-none focus:border-rose-400"
+                              />
+                              <div className="flex justify-end">
+                                <button
+                                  type="submit"
+                                  className="min-h-[42px] px-5 py-2 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white text-xs font-bold shadow-sm hover:brightness-105 transition flex items-center gap-1.5"
+                                >
+                                  <Send className="w-3.5 h-3.5" />
+                                  <span>Submit My Answer &amp; Sync ✨</span>
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-3 border-t border-stone-100">
+                              <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/80 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                                    <span>{currentProfile.avatar}</span>
+                                    <span>{currentProfile.name}&apos;s Answer</span>
+                                  </span>
+                                  <span className="text-[10px] text-rose-600">{myAns.answeredAt}</span>
+                                </div>
+                                <p className="text-sm text-stone-800 leading-relaxed">{myAns.text}</p>
+                              </div>
+
+                              <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-1">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                                    <span>{partnerProfile.avatar}</span>
+                                    <span>{partnerProfile.name}&apos;s Answer</span>
+                                  </span>
+                                  {partnerAns?.answeredAt && (
+                                    <span className="text-[10px] text-amber-700">{partnerAns.answeredAt}</span>
+                                  )}
+                                </div>
+                                {partnerAns?.text ? (
+                                  <p className="text-sm text-stone-800 leading-relaxed">{partnerAns.text}</p>
+                                ) : (
+                                  <p className="text-xs text-stone-500 italic py-1">
+                                    Waiting for {partnerProfile.name} to answer on their phone… ⏳
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             ) : (
-            /* Assigned challenges; pending and completed challenges remain visible. */
+            /* Assigned Love Drops & SideQuests (both My Drops and Sent to Partner remain visible!) */
             <div className="space-y-3.5">
               {displayedQuests.length === 0 && (
                 <div className="rounded-3xl p-6 text-center bg-white/85 border border-stone-200">
-                  <p className="font-bold text-stone-800">No challenges yet</p>
+                  <p className="font-bold text-stone-800">
+                    {questViewSubMode === 'assign-partner'
+                      ? `No Photo Drops or SideQuests sent to ${partnerProfile.name} yet`
+                      : 'No Photo Drops or SideQuests for you yet'}
+                  </p>
                   <p className="text-xs text-stone-500 mt-1">
-                    Create a challenge and choose any date and time to get started.
+                    {questViewSubMode === 'assign-partner'
+                      ? `Tap "Send Photo or SideQuest to ${partnerProfile.name}" above to snap a photo or send a moment—everything you send stays listed right here!`
+                      : `When ${partnerProfile.name} sends you a Photo Drop or SideQuest, it will pop up here in real time.`}
                   </p>
                 </div>
               )}
@@ -2040,15 +3285,22 @@ export default function App() {
                   >
                     {/* Card Header Bar */}
                     <div className="px-4 pt-4 pb-2 flex items-center justify-between gap-2 flex-wrap border-b border-stone-100">
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm font-bold text-stone-900">{quest.slotLabel}</span>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-sm font-bold text-stone-900">
+                          {quest.dropType === 'photo-drop' || quest.senderPhotoUrl ? '📸 Photo Drop' : quest.slotLabel}
+                        </span>
                         <span className="text-xs px-2.5 py-0.5 rounded-full bg-stone-100 text-stone-600 font-medium flex items-center gap-1">
                           <Clock className="w-3 h-3" />
                           {quest.scheduledTime}
                         </span>
+                        <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-amber-50 text-amber-900 border border-amber-200">
+                          {isAssigningForPartner
+                            ? `Sent by ${currentProfile.name} to ${partnerProfile.name}`
+                            : `From ${appState.profiles[quest.assignedBy]?.name || partnerProfile.name}`}
+                        </span>
                       </div>
 
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         {/* Secret Preloaded Reward Indicator Badge */}
                         {quest.secretReward && !quest.isCompleted && (
                           <span className="text-[11px] font-semibold px-2.5 py-1 rounded-full bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1">
@@ -2059,12 +3311,18 @@ export default function App() {
                           </span>
                         )}
 
-                        {quest.isCompleted && (
+                        {quest.isCompleted ? (
                           <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 flex items-center gap-1">
                             <Check className="w-3 h-3" />
-                            Completed
+                            {isAssigningForPartner
+                              ? `Seen / Completed by ${partnerProfile.name}`
+                              : 'Completed'}
                           </span>
-                        )}
+                        ) : isAssigningForPartner ? (
+                          <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
+                            Sent to {partnerProfile.name} 💌
+                          </span>
+                        ) : null}
 
                         {/* Only show Edit / Secret Reward button when assigning for partner OR when Device Lock is off */}
                         {(isAssigningForPartner || !isDeviceLocked) && (
@@ -2075,7 +3333,7 @@ export default function App() {
                               setEditingQuest(quest);
                             }}
                             className="min-h-[38px] px-2.5 py-1 rounded-xl text-xs font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200/80 flex items-center gap-1 transition"
-                            title="Edit Quest or Pre-attach Secret Polaroid Reward"
+                            title="Edit Drop or Pre-attach Secret Polaroid Reward"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                             <span>{quest.secretReward ? 'Edit / Secret 🎁' : 'Add Secret 🎁'}</span>
@@ -2096,7 +3354,7 @@ export default function App() {
                               Mystery Timed Drop • Scheduled for {quest.scheduledTime}
                             </p>
                             <p className="text-xs text-stone-500 mt-0.5">
-                              {partnerProfile.name} hid a challenge here! Wait for drop time or reveal early.
+                              {partnerProfile.name} hid a surprise drop here! Wait for drop time or reveal early.
                             </p>
                           </div>
                         </div>
@@ -2113,10 +3371,36 @@ export default function App() {
                       <div className="p-4 space-y-4">
                         <div>
                           <h3 className="font-bold text-base text-stone-900">{quest.title}</h3>
-                          <p className="text-sm text-stone-600 mt-1 leading-relaxed">
-                            {quest.prompt}
-                          </p>
+                          {quest.prompt && (
+                            <p className="text-sm text-stone-600 mt-1 leading-relaxed">
+                              {quest.prompt}
+                            </p>
+                          )}
                         </div>
+
+                        {/* Sender's Attached Photo Drop (Shown directly on the card when the sender snapped/uploaded a photo!) */}
+                        {quest.senderPhotoUrl && (
+                          <div className="rounded-2xl overflow-hidden border border-rose-200/80 bg-stone-50/70 p-2.5 space-y-2">
+                            <div className="flex items-center justify-between px-1">
+                              <span className="text-xs font-bold text-rose-700 flex items-center gap-1.5">
+                                <Camera className="w-3.5 h-3.5" />
+                                <span>
+                                  Photo shared by {appState.profiles[quest.assignedBy]?.name || partnerProfile.name}
+                                </span>
+                              </span>
+                              <span className="text-[10px] font-semibold text-stone-500">
+                                Saved in Photo Vault ✓
+                              </span>
+                            </div>
+                            <div className="rounded-xl overflow-hidden max-h-80 bg-stone-900/5 flex items-center justify-center">
+                              <img
+                                src={quest.senderPhotoUrl}
+                                alt={quest.title}
+                                className="w-full max-h-80 object-cover rounded-xl"
+                              />
+                            </div>
+                          </div>
+                        )}
 
                         {/* If viewing Partner Assignment Mode: show secret reward preview & instant unlock toggle for partner */}
                         {isAssigningForPartner && !quest.isCompleted && (
@@ -2137,11 +3421,13 @@ export default function App() {
                                 <p className="text-xs font-bold text-amber-950">
                                   {quest.secretReward
                                     ? `Secret Polaroid Ready for ${partnerProfile.name}: "${quest.secretReward.caption}"`
-                                    : `No preloaded photo yet — ${partnerProfile.name} will snap their own photo`}
+                                    : quest.senderPhotoUrl
+                                    ? `Your photo is live on ${partnerProfile.name}'s screen!`
+                                    : `Optional: ${partnerProfile.name} can snap a photo when completing this`}
                                 </p>
                                 <p className="text-[11px] text-amber-800">
                                   Status on {partnerProfile.name}&apos;s phone:{' '}
-                                  <strong>{quest.isUnlocked ? 'Unlocked & Active' : `Locked until ${quest.scheduledTime}`}</strong>
+                                  <strong>{quest.isUnlocked ? 'Delivered & Active' : `Locked until ${quest.scheduledTime}`}</strong>
                                 </p>
                               </div>
                             </div>
@@ -2166,7 +3452,7 @@ export default function App() {
                               <PauseCircle className="w-5 h-5 text-amber-700 shrink-0 animate-pulse" />
                               <div>
                                 <p className="text-xs font-bold text-amber-950">
-                                  Mission Snoozed • Resumes in{' '}
+                                  Snoozed • Resumes in{' '}
                                   <span className="font-mono text-sm px-1.5 py-0.5 rounded bg-amber-200/80">
                                     {snoozeMM}:{snoozeSS}
                                   </span>
@@ -2187,7 +3473,7 @@ export default function App() {
                           </div>
                         )}
 
-                        {/* If Active on MY Quests: Snooze Controls + Complete Button */}
+                        {/* If Active on MY Quests: Snooze Controls + Complete / Love Photo Drop Buttons */}
                         {!quest.isCompleted && !isAssigningForPartner && (
                           <div className="pt-1 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-stone-100">
                             <div className="flex items-center gap-1.5 flex-wrap">
@@ -2232,18 +3518,32 @@ export default function App() {
                               </button>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={() => handleInitiateQuestCompletion(quest)}
-                              className="min-h-[44px] px-5 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 hover:brightness-105 active:scale-95 transition flex items-center justify-center gap-2"
-                            >
-                              <Sparkles className="w-4 h-4" />
-                              <span>
-                                {quest.secretReward
-                                  ? 'Complete & Unlock Secret Polaroid 📸'
-                                  : 'Complete & Snap Polaroid 📸'}
-                              </span>
-                            </button>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {quest.senderPhotoUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleAcknowledgePhotoDrop(quest)}
+                                  className="min-h-[44px] px-4 py-2.5 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition flex items-center justify-center gap-1.5"
+                                >
+                                  <Heart className="w-4 h-4 fill-white" />
+                                  <span>Love &amp; Keep Photo 💖</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleInitiateQuestCompletion(quest)}
+                                className="min-h-[44px] px-5 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-rose-600 text-white font-bold text-xs shadow-md shadow-rose-200 hover:brightness-105 active:scale-95 transition flex items-center justify-center gap-2"
+                              >
+                                <Sparkles className="w-4 h-4" />
+                                <span>
+                                  {quest.secretReward
+                                    ? 'Complete & Unlock Secret Polaroid 📸'
+                                    : quest.senderPhotoUrl
+                                    ? 'Snap Photo Back 📸'
+                                    : 'Complete & Snap Polaroid 📸'}
+                                </span>
+                              </button>
+                            </div>
                           </div>
                         )}
 
@@ -2829,6 +4129,15 @@ export default function App() {
                             : 'bg-stone-100 text-stone-800 border border-stone-200/80 rounded-bl-xs'
                         }`}
                       >
+                        {msg.photoUrl && (
+                          <div className="mb-2 rounded-xl overflow-hidden border border-white/25 max-w-[240px]">
+                            <img
+                              src={msg.photoUrl}
+                              alt={msg.text || 'Shared chat photo'}
+                              className="w-full h-auto object-cover"
+                            />
+                          </div>
+                        )}
                         <p className="text-sm leading-relaxed">{msg.text}</p>
                         <div
                           className={`text-[10px] mt-1 flex items-center justify-end gap-1 ${
@@ -2923,6 +4232,24 @@ export default function App() {
               className="p-3 bg-white border-t border-stone-200/80 flex items-center gap-2"
             >
               <input
+                ref={chatPhotoUploadRef}
+                type="file"
+                accept="image/*"
+                multiple
+                onChange={(event) => void handleChatPhotoUpload(event)}
+                className="hidden"
+                aria-label="Send photo in chat"
+              />
+              <button
+                type="button"
+                onClick={() => chatPhotoUploadRef.current?.click()}
+                className="min-w-[44px] min-h-[44px] rounded-2xl bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 flex items-center justify-center transition shrink-0"
+                title="Send a photo in chat (also saves to Photo Vault)"
+                aria-label="Attach photo"
+              >
+                <Camera className="w-4 h-4" />
+              </button>
+              <input
                 type="text"
                 value={chatDraft}
                 onChange={(e) => {
@@ -2957,7 +4284,7 @@ export default function App() {
           {[
             {
               id: 'quests',
-              label: 'Quests',
+              label: 'Love Drops',
               icon: Compass,
               badge: myUncompletedCount
             },
@@ -3062,10 +4389,10 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Step 2: Shared Couple Room Code & Live Server URL */}
+              {/* Step 2: Firestore room */}
               <div className="p-4 rounded-2xl bg-white border border-stone-200 space-y-3">
                 <p className="text-xs font-bold uppercase tracking-wider text-amber-700">
-                  2. Live Couple Room Code &amp; Partner Invite Links
+                  2. Firestore live sync &amp; room
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
@@ -3082,25 +4409,6 @@ export default function App() {
                       className="w-full min-h-[40px] px-3 rounded-xl bg-stone-50 border border-stone-200 text-xs font-mono font-bold"
                     />
                   </div>
-                  <div>
-                    <label className="block text-[11px] font-bold text-stone-600 mb-1">
-                      Live Server URL (Optional)
-                    </label>
-                    <input
-                      type="text"
-                      value={customServerUrl}
-                      onChange={(e) => {
-                        setCustomServerUrl(e.target.value);
-                        try {
-                          localStorage.setItem(SERVER_URL_KEY, e.target.value);
-                        } catch {
-                          // ignore
-                        }
-                      }}
-                      placeholder="https://our-sidequests.onrender.com"
-                      className="w-full min-h-[40px] px-3 rounded-xl bg-stone-50 border border-stone-200 text-xs"
-                    />
-                  </div>
                 </div>
 
                 {/* Copy Dedicated Partner Links */}
@@ -3108,8 +4416,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const base = customServerUrl.trim() || window.location.origin;
-                      const url = `${base}/?partner=aaron&room=${appState.roomCode}`;
+                      const url = `${window.location.origin}/?room=${appState.roomCode}`;
                       copyTextSafe(url);
                       pushToast('Copied Aaron’s App Link! 🔗', url, '🐻', 'rose');
                     }}
@@ -3121,8 +4428,7 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const base = customServerUrl.trim() || window.location.origin;
-                      const url = `${base}/?partner=vini&room=${appState.roomCode}`;
+                      const url = `${window.location.origin}/?room=${appState.roomCode}`;
                       copyTextSafe(url);
                       pushToast('Copied Vini’s App Link! 🔗', url, '🐰', 'amber');
                     }}
@@ -3141,7 +4447,7 @@ export default function App() {
                     3. Partner Email Mapping &amp; Firebase Cloud
                   </p>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200">
-                    Firestore Ready
+                    {syncChannelStatus === 'live' ? 'Firestore Live' : 'Connecting'}
                   </span>
                 </div>
                 <p className="text-[11px] text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-xl p-2.5">
@@ -3183,25 +4489,10 @@ export default function App() {
                   Sign out of {authEmail}
                 </button>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const rules = `rules_version = '2';\nservice cloud.firestore {\n  match /databases/{database}/documents {\n    match /couples/{roomId} {\n      allow read, write: if request.auth != null && request.auth.token.email_verified == true && request.auth.token.email in ['${AUTHORIZED_EMAILS.aaron}', '${AUTHORIZED_EMAILS.vini}'];\n    }\n  }\n}`;
-                      copyTextSafe(rules);
-                      pushToast(
-                        'Copied Firestore Security Rules! 🛡️',
-                        `Locked strictly to ${AUTHORIZED_EMAILS.aaron} & ${AUTHORIZED_EMAILS.vini}`,
-                        '🛡️',
-                        'emerald'
-                      );
-                    }}
-                    className="min-h-[40px] px-3 py-2 rounded-xl bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-emerald-900 text-xs font-bold flex items-center justify-center gap-1.5 transition"
-                  >
-                    <Shield className="w-3.5 h-3.5" />
-                    <span>Copy Firestore Security Rules</span>
-                  </button>
-
+                <p className="text-[11px] text-stone-600">
+                  Chats, your assigned challenges, profiles, and photos sync through Firestore. Security rules are deployed from this project&apos;s <code>firestore.rules</code> file.
+                </p>
+                <div className="grid grid-cols-1 gap-2 pt-1">
                   <button
                     type="button"
                     onClick={() => void requestPushNotifications()}
@@ -3235,85 +4526,412 @@ export default function App() {
         </div>
       )}
 
+      {/* =================================================================== */}
+      {/* MODAL: SITE THEME PICKER (5 LIGHT THEMES + 3 DARK THEMES)           */}
+      {/* =================================================================== */}
+      {isThemeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-5 border border-rose-200 shadow-2xl space-y-4 my-8">
+            <div className="flex items-start justify-between gap-3 border-b border-stone-200 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xl">{activeSiteTheme.icon}</span>
+                  <h2 className="font-editorial font-bold text-xl text-stone-900">
+                    Choose Your Site Theme
+                  </h2>
+                </div>
+                <p className="text-xs text-stone-500 mt-0.5">
+                  Pick from 5 daylight aesthetics or 3 high-contrast dark modes. Saved automatically on your device.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsThemeModalOpen(false)}
+                className="w-9 h-9 rounded-full bg-stone-100 flex items-center justify-center text-stone-600 hover:bg-stone-200"
+                aria-label="Close theme picker"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-3 max-h-[65vh] overflow-y-auto pr-1">
+              <p className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500">
+                ☀️ Daylight &amp; Pastel Themes
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {(Object.values(SITE_THEMES) as SiteThemeDefinition[])
+                  .filter((t) => !t.isDark)
+                  .map((theme) => {
+                    const isSelected = siteThemeId === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        onClick={() => handleSelectSiteTheme(theme.id)}
+                        className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                          isSelected
+                            ? 'border-2 border-rose-500 bg-rose-50/60 shadow-sm'
+                            : 'border-stone-200 bg-stone-50/70 hover:border-rose-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
+                            <span className="text-base">{theme.icon}</span>
+                            <span>{theme.name}</span>
+                          </span>
+                          {isSelected && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500 text-white">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-stone-600 leading-snug">{theme.tagline}</p>
+                        <div className="flex items-center gap-1.5 pt-1">
+                          {theme.swatchColors.map((hex, i) => (
+                            <span
+                              key={i}
+                              style={{ backgroundColor: hex }}
+                              className="w-5 h-5 rounded-full border border-black/15 shadow-2xs"
+                            />
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+
+              <p className="text-[11px] font-extrabold uppercase tracking-wider text-stone-500 pt-2">
+                🌙 High-Contrast Dark Themes
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                {(Object.values(SITE_THEMES) as SiteThemeDefinition[])
+                  .filter((t) => t.isDark)
+                  .map((theme) => {
+                    const isSelected = siteThemeId === theme.id;
+                    return (
+                      <button
+                        key={theme.id}
+                        type="button"
+                        onClick={() => handleSelectSiteTheme(theme.id)}
+                        className={`p-3 rounded-2xl border text-left transition flex flex-col justify-between gap-2 ${
+                          isSelected
+                            ? 'border-2 border-rose-500 bg-rose-50/60 shadow-sm'
+                            : 'border-stone-200 bg-stone-50/70 hover:border-rose-300'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-bold text-xs text-stone-900 flex items-center gap-1.5">
+                            <span className="text-base">{theme.icon}</span>
+                            <span>{theme.name}</span>
+                          </span>
+                          {isSelected && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-rose-500 text-white">
+                              Active
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-stone-600 leading-snug">{theme.tagline}</p>
+                        <div className="flex items-center gap-1.5 pt-1">
+                          {theme.swatchColors.map((hex, i) => (
+                            <span
+                              key={i}
+                              style={{ backgroundColor: hex }}
+                              className="w-5 h-5 rounded-full border border-white/25 shadow-2xs"
+                            />
+                          ))}
+                        </div>
+                      </button>
+                    );
+                  })}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-stone-200">
+              <button
+                type="button"
+                onClick={handleToggleDarkMode}
+                className="min-h-[42px] px-4 rounded-xl bg-stone-100 text-stone-800 text-xs font-bold flex items-center gap-1.5"
+              >
+                {isDarkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
+                <span>Quick Toggle {isDarkMode ? 'Light' : 'Dark'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsThemeModalOpen(false)}
+                className="min-h-[42px] px-5 rounded-xl bg-gradient-to-r from-rose-500 to-amber-500 text-white text-xs font-bold shadow-sm"
+              >
+                Done ✨
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {isCreateChallengeOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <form
-            className="bg-white rounded-3xl max-w-lg w-full p-5 border border-rose-200 shadow-2xl space-y-4"
+            className="bg-white rounded-3xl max-w-lg w-full p-5 border border-rose-200 shadow-2xl space-y-4 my-8"
             onSubmit={(event) => {
               event.preventDefault();
-              if (!challengeTitle.trim() || !challengePrompt.trim() || !challengeDateTime) return;
-              const target = questViewSubMode === 'assign-partner' ? otherPartner : activePartner;
-              const scheduledDate = new Date(challengeDateTime);
-              if (Number.isNaN(scheduledDate.getTime())) return;
-              const timeLabel = scheduledDate.toLocaleString([], {
+              const isPhotoDrop = challengeDropType === 'photo-drop';
+              const finalTitle =
+                challengeTitle.trim() ||
+                (isPhotoDrop || challengePhotoUrl
+                  ? `📸 Photo Drop from ${currentProfile.name}`
+                  : '');
+              const finalPrompt =
+                challengePrompt.trim() ||
+                (challengePhotoUrl
+                  ? `${currentProfile.name} sent you a photo moment! Tap to view or snap one back.`
+                  : '');
+
+              if (!finalTitle) {
+                pushToast('Add a title or photo', 'Please add a photo or a short title first.', '✨', 'amber');
+                return;
+              }
+              if (isPhotoDrop && !challengePhotoUrl && !challengePrompt.trim()) {
+                pushToast(
+                  'Snap or Upload a Photo 📸',
+                  'Tap "Take Photo" or "Upload Photo" to send a Photo Drop, or add a note!',
+                  '📸',
+                  'amber'
+                );
+                return;
+              }
+
+              const target = otherPartner;
+              const scheduledDate = challengeDateTime ? new Date(challengeDateTime) : new Date();
+              const validDate = Number.isNaN(scheduledDate.getTime()) ? new Date() : scheduledDate;
+              const timeLabel = validDate.toLocaleString([], {
                 dateStyle: 'medium',
                 timeStyle: 'short'
               });
+              const now = Date.now();
               const newChallenge: QuestItem = {
-                id: `challenge-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                id: `challenge-${now}-${Math.random().toString(36).slice(2, 8)}`,
                 forPartner: target,
                 assignedBy: activePartner,
                 slot: 'golden',
-                slotLabel: 'Custom challenge',
+                slotLabel:
+                  isPhotoDrop || challengePhotoUrl
+                    ? `📸 Photo Drop for ${appState.profiles[target].name}`
+                    : `✨ SideQuest for ${appState.profiles[target].name}`,
+                dropType: isPhotoDrop || challengePhotoUrl ? 'photo-drop' : 'sidequest',
+                ...(challengePhotoUrl ? { senderPhotoUrl: challengePhotoUrl } : {}),
                 scheduledTime: timeLabel,
-                scheduledAt: scheduledDate.toISOString(),
-                assignedAt: new Date().toISOString(),
-                title: challengeTitle.trim(),
-                prompt: challengePrompt.trim(),
+                scheduledAt: validDate.toISOString(),
+                assignedAt: new Date(now).toISOString(),
+                title: finalTitle,
+                prompt: finalPrompt,
                 isUnlocked: true,
                 isCompleted: false,
                 snoozedMinutesTotal: 0,
                 snoozeUntilTimestamp: null,
                 secretReward: null,
-                completedMemoryId: null
+                completedMemoryId: null,
+                createdAt: now,
+                updatedAt: now
               };
+
               knownQuestIdsRef.current.add(newChallenge.id);
-              updateSharedState((prev) => ({ ...prev, quests: [...prev.quests, newChallenge] }));
-              if (target !== activePartner) {
-                pushToast(
-                  'Challenge assigned',
-                  `${appState.profiles[target].name} will be notified when their app syncs.`,
-                  '🔔',
-                  'emerald'
+              void saveQuest(appState.roomCode, newChallenge).catch((err) =>
+                console.error('Failed to immediately save new Love Drop:', err)
+              );
+
+              // If sender attached a photo, also save it permanently into the shared Photo Vault!
+              if (challengePhotoUrl) {
+                const senderMemory: PolaroidMemory = {
+                  id: `photo-drop-${now}-${Math.random().toString(36).slice(2, 7)}`,
+                  questId: newChallenge.id,
+                  ownerId: activePartner,
+                  createdBy: activePartner,
+                  photoUrl: challengePhotoUrl,
+                  caption: finalTitle,
+                  sticker: '📸',
+                  washi: 'rose',
+                  timestamp: timeLabel,
+                  questTitle: `Photo Drop to ${appState.profiles[target].name}`,
+                  createdAt: now,
+                  updatedAt: now
+                };
+                void saveMemory(appState.roomCode, senderMemory).catch((err) =>
+                  console.error('Failed to save sender photo drop to Vault:', err)
                 );
+                updateSharedState((prev) => ({
+                  ...prev,
+                  quests: [newChallenge, ...prev.quests],
+                  memories: [senderMemory, ...prev.memories]
+                }));
+              } else {
+                updateSharedState((prev) => ({ ...prev, quests: [newChallenge, ...prev.quests] }));
               }
+
+              setQuestViewSubMode('assign-partner');
+              pushToast(
+                challengePhotoUrl
+                  ? `Photo Drop Sent to ${appState.profiles[target].name}! 📸`
+                  : `SideQuest Sent to ${appState.profiles[target].name}! ✨`,
+                `Saved in your "Sent to ${appState.profiles[target].name}" list${
+                  challengePhotoUrl ? ' & Photo Vault' : ''
+                } and synced live!`,
+                challengePhotoUrl ? '📸' : '🔔',
+                'emerald'
+              );
+              setChallengePhotoUrl('');
               setIsCreateChallengeOpen(false);
             }}
           >
             <div className="flex items-start justify-between gap-3">
               <div>
-                <h2 className="font-editorial font-bold text-xl text-stone-900">Create a challenge</h2>
+                <h2 className="font-editorial font-bold text-xl text-stone-900">
+                  Send a Photo Drop or SideQuest to {partnerProfile.name}
+                </h2>
                 <p className="text-xs text-stone-500 mt-1">
-                  For {questViewSubMode === 'assign-partner' ? partnerProfile.name : currentProfile.name}
+                  Snap &amp; send a random photo just to show {partnerProfile.name}, or post a fun SideQuest for them!
                 </p>
               </div>
-              <button type="button" onClick={() => setIsCreateChallengeOpen(false)} aria-label="Close challenge form">
-                <X className="w-5 h-5" />
+              <button
+                type="button"
+                onClick={() => setIsCreateChallengeOpen(false)}
+                aria-label="Close form"
+                className="w-8 h-8 rounded-full bg-stone-100 flex items-center justify-center text-stone-600"
+              >
+                <X className="w-4 h-4" />
               </button>
             </div>
-            <label className="block text-xs font-bold text-stone-700">
-              Challenge title
+
+            {/* Mode Selector: Photo Drop vs SideQuest */}
+            <div className="grid grid-cols-2 gap-2 p-1 rounded-2xl bg-stone-100 border border-stone-200">
+              <button
+                type="button"
+                onClick={() => setChallengeDropType('photo-drop')}
+                className={`min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                  challengeDropType === 'photo-drop'
+                    ? 'bg-white text-rose-600 shadow-xs border border-rose-200'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Camera className="w-4 h-4" />
+                <span>📸 Send Photo Drop</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setChallengeDropType('sidequest')}
+                className={`min-h-[42px] px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition ${
+                  challengeDropType === 'sidequest'
+                    ? 'bg-white text-amber-700 shadow-xs border border-amber-200'
+                    : 'text-stone-600 hover:text-stone-900'
+                }`}
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>✨ Post a SideQuest</span>
+              </button>
+            </div>
+
+            {/* Camera & Gallery Upload Section (Available in both modes so sender can always attach a photo!) */}
+            <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/80 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-rose-900 flex items-center gap-1.5">
+                  <Camera className="w-4 h-4 text-rose-600" />
+                  <span>
+                    {challengeDropType === 'photo-drop'
+                      ? `Your Photo for ${partnerProfile.name}`
+                      : `Attach a Photo (Optional)`}
+                  </span>
+                </span>
+                {challengePhotoUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setChallengePhotoUrl('')}
+                    className="text-[11px] font-bold text-rose-600 hover:underline flex items-center gap-1"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                    <span>Remove Photo</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Hidden file inputs for Camera Capture and Photo Library */}
               <input
-                required
+                ref={challengeCameraInputRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                onChange={(e) => void handleChallengePhotoSelect(e)}
+                className="hidden"
+              />
+              <input
+                ref={challengeGalleryInputRef}
+                type="file"
+                accept="image/*"
+                onChange={(e) => void handleChallengePhotoSelect(e)}
+                className="hidden"
+              />
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => challengeCameraInputRef.current?.click()}
+                  className="min-h-[42px] px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs transition"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>{challengePhotoBusy ? 'Processing…' : 'Take Photo 📷'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => challengeGalleryInputRef.current?.click()}
+                  className="min-h-[42px] px-3 py-2 rounded-xl bg-white hover:bg-stone-50 text-stone-800 border border-stone-200 text-xs font-bold flex items-center justify-center gap-1.5 transition"
+                >
+                  <Upload className="w-4 h-4 text-rose-500" />
+                  <span>Upload Photo 🖼️</span>
+                </button>
+              </div>
+
+              {challengePhotoUrl && (
+                <div className="rounded-xl overflow-hidden border border-rose-200 bg-white p-1.5">
+                  <img
+                    src={challengePhotoUrl}
+                    alt="Preview to send"
+                    className="w-full max-h-52 object-cover rounded-lg"
+                  />
+                </div>
+              )}
+            </div>
+
+            <label className="block text-xs font-bold text-stone-700">
+              {challengeDropType === 'photo-drop' ? 'Caption / Title' : 'SideQuest Title'}
+              <input
+                required={challengeDropType === 'sidequest' && !challengePhotoUrl}
+                placeholder={
+                  challengeDropType === 'photo-drop'
+                    ? `e.g. Look what I just spotted thinking of you ☕💛`
+                    : `e.g. Send me a selfie with your coffee ☕`
+                }
                 value={challengeTitle}
                 onChange={(event) => setChallengeTitle(event.target.value)}
                 className="mt-1 w-full min-h-[42px] px-3 rounded-xl bg-stone-50 border border-stone-200 text-sm"
               />
             </label>
             <label className="block text-xs font-bold text-stone-700">
-              Instructions
+              {challengeDropType === 'photo-drop'
+                ? `Sweet note or message for ${partnerProfile.name} (optional)`
+                : `Details / prompt for ${partnerProfile.name}`}
               <textarea
-                required
-                rows={3}
+                required={challengeDropType === 'sidequest' && !challengePhotoUrl}
+                rows={2}
+                placeholder={
+                  challengeDropType === 'photo-drop'
+                    ? `Add a note to go with your photo (or leave blank to just send the photo!)...`
+                    : `Describe what ${partnerProfile.name} can do or share for this SideQuest...`
+                }
                 value={challengePrompt}
                 onChange={(event) => setChallengePrompt(event.target.value)}
                 className="mt-1 w-full p-3 rounded-xl bg-stone-50 border border-stone-200 text-sm"
               />
             </label>
             <label className="block text-xs font-bold text-stone-700">
-              Date and time
+              Date and time (optional — defaults to right now)
               <input
-                required
                 type="datetime-local"
                 value={challengeDateTime}
                 onChange={(event) => setChallengeDateTime(event.target.value)}
@@ -3321,14 +4939,187 @@ export default function App() {
               />
             </label>
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setIsCreateChallengeOpen(false)} className="min-h-[42px] px-4 rounded-xl bg-stone-100 text-stone-700 text-sm font-bold">
+              <button
+                type="button"
+                onClick={() => setIsCreateChallengeOpen(false)}
+                className="min-h-[42px] px-4 rounded-xl bg-stone-100 text-stone-700 text-sm font-bold"
+              >
                 Cancel
               </button>
-              <button type="submit" className="min-h-[42px] px-4 rounded-xl bg-rose-600 text-white text-sm font-bold">
-                Save challenge
+              <button
+                type="submit"
+                className="min-h-[42px] px-4 rounded-xl bg-gradient-to-r from-rose-500 to-amber-500 text-white text-sm font-bold shadow-sm"
+              >
+                {challengeDropType === 'photo-drop' || challengePhotoUrl
+                  ? `Send Photo Drop to ${partnerProfile.name} 📸`
+                  : `Send SideQuest to ${partnerProfile.name} 🚀`}
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL: SHARED AI / RANDOM COUPLE PROMPT POP-UP (BOTH MUST ANSWER)   */}
+      {/* =================================================================== */}
+      {activeModalSharedPrompt && (
+        <div className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-[#FAF7F2] rounded-3xl max-w-lg w-full p-5 border-2 border-rose-300 shadow-2xl space-y-4 my-8">
+            <div className="flex items-start justify-between gap-3 border-b border-stone-200 pb-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-rose-500 to-amber-500 text-white flex items-center justify-center text-2xl shadow-sm shrink-0">
+                  {activeModalSharedPrompt.promptCategory
+                    ? SHARED_PROMPT_CATEGORY_META[activeModalSharedPrompt.promptCategory].icon
+                    : '🤖'}
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-600 text-white">
+                      Pop-Up Couple Prompt ✨
+                    </span>
+                    <span className="text-[11px] font-bold text-stone-600">
+                      Both Aaron &amp; Vini Answer
+                    </span>
+                  </div>
+                  <h3 className="font-editorial font-bold text-lg text-stone-900 mt-0.5">
+                    {activeModalSharedPrompt.title}
+                  </h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSharedPromptModalId(null)}
+                className="w-9 h-9 rounded-full bg-stone-200/70 flex items-center justify-center text-stone-600 hover:bg-stone-300"
+                aria-label="Close prompt popup"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-white border border-rose-200/80 space-y-2">
+              <p className="text-sm text-stone-800 font-medium leading-relaxed">
+                {activeModalSharedPrompt.prompt}
+              </p>
+              <div className="flex items-center gap-2 pt-1 text-xs font-bold">
+                <span
+                  className={`px-2.5 py-0.5 rounded-full ${
+                    activeModalSharedPrompt.answers?.aaron?.text
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-stone-100 text-stone-600'
+                  }`}
+                >
+                  {appState.profiles.aaron.avatar} {appState.profiles.aaron.name}:{' '}
+                  {activeModalSharedPrompt.answers?.aaron?.text ? 'Answered ✓' : 'Waiting ⏳'}
+                </span>
+                <span
+                  className={`px-2.5 py-0.5 rounded-full ${
+                    activeModalSharedPrompt.answers?.vini?.text
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-stone-100 text-stone-600'
+                  }`}
+                >
+                  {appState.profiles.vini.avatar} {appState.profiles.vini.name}:{' '}
+                  {activeModalSharedPrompt.answers?.vini?.text ? 'Answered ✓' : 'Waiting ⏳'}
+                </span>
+              </div>
+            </div>
+
+            {!activeModalSharedPrompt.answers?.[activePartner]?.text ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSubmitSharedPromptAnswer(activeModalSharedPrompt);
+                }}
+                className="space-y-3"
+              >
+                {activeModalSharedPrompt.answers?.[otherPartner]?.text && (
+                  <div className="p-3 rounded-2xl bg-amber-50 border border-amber-300 text-xs text-amber-950 font-semibold flex items-center gap-2">
+                    <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>
+                      {partnerProfile.name} already answered! Submit your answer below to reveal both answers side-by-side.
+                    </span>
+                  </div>
+                )}
+                <label className="block text-xs font-bold text-stone-700">
+                  Your Answer ({currentProfile.name} {currentProfile.avatar})
+                  <textarea
+                    required
+                    rows={3}
+                    value={sharedPromptDrafts[activeModalSharedPrompt.id] || ''}
+                    onChange={(e) =>
+                      setSharedPromptDrafts((prev) => ({
+                        ...prev,
+                        [activeModalSharedPrompt.id]: e.target.value
+                      }))
+                    }
+                    placeholder={`Type your answer for ${partnerProfile.name} to see...`}
+                    className="mt-1.5 w-full p-3 rounded-2xl bg-white border border-stone-300 text-sm focus:outline-none focus:border-rose-500"
+                  />
+                </label>
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => handleDropSharedPrompt()}
+                    className="min-h-[42px] px-3.5 py-2 rounded-2xl bg-white border border-stone-300 text-stone-700 text-xs font-bold flex items-center gap-1.5 hover:bg-stone-100 transition"
+                  >
+                    <Dices className="w-4 h-4 text-rose-500" />
+                    <span>Roll Different Prompt 🎲</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="min-h-[42px] px-5 py-2 rounded-2xl bg-gradient-to-r from-rose-500 to-amber-500 text-white text-xs font-bold shadow-md hover:brightness-105 transition flex items-center gap-1.5"
+                  >
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Submit Answer ✨</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-3">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 space-y-1">
+                    <p className="text-xs font-bold text-rose-900">
+                      {currentProfile.avatar} {currentProfile.name}&apos;s Answer
+                    </p>
+                    <p className="text-sm text-stone-800">
+                      {activeModalSharedPrompt.answers[activePartner]?.text}
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 space-y-1">
+                    <p className="text-xs font-bold text-amber-950">
+                      {partnerProfile.avatar} {partnerProfile.name}&apos;s Answer
+                    </p>
+                    {activeModalSharedPrompt.answers?.[otherPartner]?.text ? (
+                      <p className="text-sm text-stone-800">
+                        {activeModalSharedPrompt.answers[otherPartner]?.text}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-stone-500 italic">
+                        Waiting for {partnerProfile.name} to submit their answer… ⏳
+                      </p>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-stone-200">
+                  <button
+                    type="button"
+                    onClick={() => handleDropSharedPrompt()}
+                    className="min-h-[42px] px-3.5 py-2 rounded-2xl bg-white border border-stone-300 text-stone-700 text-xs font-bold flex items-center gap-1.5 hover:bg-stone-100 transition"
+                  >
+                    <Dices className="w-4 h-4 text-rose-500" />
+                    <span>Next Random Prompt 🎲</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveSharedPromptModalId(null)}
+                    className="min-h-[42px] px-5 py-2 rounded-2xl bg-stone-900 text-white text-xs font-bold"
+                  >
+                    Done ❤️
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -3362,6 +5153,9 @@ export default function App() {
           onClose={() => setEditingQuest(null)}
           onSave={(updatedQuest) => {
             soundEngine.playChime();
+            void saveQuest(appState.roomCode, updatedQuest).catch((err) =>
+              console.error('Failed to immediately save edited quest:', err)
+            );
             updateSharedState((prev) => ({
               ...prev,
               quests: prev.quests.map((q) => (q.id === updatedQuest.id ? updatedQuest : q))
@@ -3401,11 +5195,20 @@ export default function App() {
           profiles={appState.profiles}
           onClose={() => setIsSpontaneousMemoryOpen(false)}
           onSaveMemory={(memory) => {
+            const now = Date.now();
+            const enriched: PolaroidMemory = {
+              ...memory,
+              createdAt: memory.createdAt || now,
+              updatedAt: now
+            };
             soundEngine.playFanfare();
             triggerCelebrationConfetti();
+            void saveMemory(appState.roomCode, enriched).catch((err) =>
+              console.error('Failed to immediately save spontaneous memory:', err)
+            );
             updateSharedState((prev) => ({
               ...prev,
-              memories: [memory, ...prev.memories]
+              memories: [enriched, ...prev.memories]
             }));
             setIsSpontaneousMemoryOpen(false);
             pushToast(
@@ -3429,16 +5232,23 @@ export default function App() {
           profiles={appState.profiles}
           onClose={() => setEditingMemoryModal(null)}
           onSaveMemory={(updatedMemory) => {
+            const enriched: PolaroidMemory = {
+              ...updatedMemory,
+              updatedAt: Date.now()
+            };
             soundEngine.playPolaroidShutter();
+            void saveMemory(appState.roomCode, enriched).catch((err) =>
+              console.error('Failed to immediately save updated memory:', err)
+            );
             updateSharedState((prev) => ({
               ...prev,
               memories: prev.memories.map((m) =>
-                m.id === updatedMemory.id ? updatedMemory : m
+                m.id === enriched.id ? enriched : m
               )
             }));
             setEditingMemoryModal(null);
-            if (lightboxMemory?.id === updatedMemory.id) {
-              setLightboxMemory(updatedMemory);
+            if (lightboxMemory?.id === enriched.id) {
+              setLightboxMemory(enriched);
             }
             pushToast(
               'Polaroid Keepsake Updated! ✨',

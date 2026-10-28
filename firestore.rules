@@ -1,0 +1,138 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model
+// ===============================================================
+//
+// This security rules file enforces access control for the Daily SideQuests
+// couple app, used exclusively by two verified partners:
+//   - aaronmathewg21@gmail.com -> 'aaron'
+//   - viniputhran17@gmail.com -> 'vini'
+//
+// Collection: /couples/{roomId}/profiles/{profileId}
+//   - id: string ('aaron' | 'vini', must match profileId)
+//
+// Collection: /couples/{roomId}/quests/{questId}
+//   - forPartner: string ('aaron' | 'vini', immutable on update)
+//   - assignedBy: string ('aaron' | 'vini', immutable on update)
+//
+// Collection: /couples/{roomId}/chatMessages/{messageId}
+//   - senderId: string ('aaron' | 'vini', immutable on update)
+//   - text: string (immutable on update)
+//
+// Collection: /couples/{roomId}/memories/{memoryId}
+//   - createdBy: string ('aaron' | 'vini', immutable on update)
+//   - ownerId: string ('aaron' | 'vini', immutable on update)
+//
+// Collection: /couples/{roomId}/privateNotes/{partnerId}
+//   - Partner-private scratchpad document, readable/writable only when partnerId == partner()
+//
+// Collection: /couples/{roomId}/presence/{partnerId}
+//   - Partner presence state, readable by both partners, writable only when partnerId == partner()
+//
+// Collection: /couples/{roomId}/pushTokens/{tokenId}
+//   - uid: string (must match request.auth.uid)
+//   - partner: string (must match partner())
+//
+// Collection: /couples/{roomId}/aggregates/{aggregateId}
+//   - Completion counts document ('completions'), readable/writable by authorized partners
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string;
+    }
+
+    function normalizedEmail() {
+      return signedIn() ? request.auth.token.email.lower() : '';
+    }
+
+    function partner() {
+      return normalizedEmail() == 'aaronmathewg21@gmail.com'
+        ? 'aaron'
+        : normalizedEmail() == 'viniputhran17@gmail.com'
+          ? 'vini'
+          : '';
+    }
+
+    function authorized() {
+      return partner() == 'aaron' || partner() == 'vini';
+    }
+
+    match /couples/{roomId} {
+      match /profiles/{profileId} {
+        allow read: if authorized();
+        allow create, update: if authorized()
+          && profileId in ['aaron', 'vini']
+          && request.resource.data.id == profileId;
+        allow delete: if false;
+      }
+
+      match /quests/{questId} {
+        allow read: if authorized();
+        allow create: if authorized()
+          && request.resource.data.forPartner in ['aaron', 'vini']
+          && request.resource.data.assignedBy in ['aaron', 'vini'];
+        allow update: if authorized()
+          && request.resource.data.forPartner == resource.data.forPartner
+          && request.resource.data.assignedBy == resource.data.assignedBy;
+        allow delete: if false;
+      }
+
+      match /chatMessages/{messageId} {
+        allow read: if authorized();
+        allow create: if authorized()
+          && request.resource.data.senderId in ['aaron', 'vini']
+          && request.resource.data.text is string;
+        allow update: if authorized()
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.text == resource.data.text;
+        allow delete: if false;
+      }
+
+      match /memories/{memoryId} {
+        allow read: if authorized();
+        allow create: if authorized()
+          && request.resource.data.createdBy in ['aaron', 'vini']
+          && request.resource.data.ownerId in ['aaron', 'vini'];
+        allow update: if authorized()
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.ownerId == resource.data.ownerId;
+        allow delete: if false;
+      }
+
+      match /privateNotes/{partnerId} {
+        allow read, write: if authorized() && partnerId == partner();
+      }
+
+      match /presence/{partnerId} {
+        allow read: if authorized();
+        allow create, update: if authorized() && partnerId == partner();
+        allow delete: if false;
+      }
+
+      match /pushTokens/{tokenId} {
+        allow create, update: if authorized()
+          && request.resource.data.uid == request.auth.uid
+          && request.resource.data.partner == partner();
+        allow read, delete: if false;
+      }
+
+      match /aggregates/{aggregateId} {
+        allow read, write: if authorized() && aggregateId == 'completions';
+      }
+
+      match /{document=**} {
+        allow read, write: if false;
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
